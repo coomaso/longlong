@@ -2,7 +2,6 @@ import requests
 import time
 import json
 import random 
-# 移除: from tqdm import tqdm # 移除 tqdm 进度条库
 
 # 设置请求头
 headers = {
