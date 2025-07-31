@@ -32,9 +32,9 @@ def make_request_with_retry(method, url, headers, params, timeout, retries=0):
         return response
     except requests.exceptions.RequestException as e:
         if retries < MAX_RETRIES:
-            delay = INITIAL_RETRY_DELAY + random.uniform(0, 2) # 指数退避加随机抖动
+            delay = INITIAL_RETRY_DELAY * (2 ** retries) + random.uniform(0, 2) # 指数退避加随机抖动
             print(f"请求失败: {url} - {e}。第 {retries + 1}/{MAX_RETRIES} 次重试，等待 {delay:.2f} 秒...")
-            time.sleep(delay)
+            # 移除: time.sleep(delay)
             return make_request_with_retry(method, url, headers, params, timeout, retries + 1)
         else:
             print(f"请求失败: {url} - {e}。已达到最大重试次数 ({MAX_RETRIES})，放弃请求。")
@@ -48,7 +48,7 @@ def get_categories():
     try:
         response = make_request_with_retry('get', url, headers, params, timeout=10) # 使用重试函数
         data = response.json()
-        print(f"分类源码: {data}")
+        
         if data.get('errNo') == 0:
             return data['result']
         else:
@@ -168,7 +168,7 @@ def process_category(category):
             detailed_threads = []
             for thread_idx, thread in enumerate(threads): # 增加帖子索引
                 tid = thread.get('tid')
-                thread_title = thread.get('title', '无标题帖子') # 获取帖子标题用于提示
+                thread_title = thread.get('subject', '无标题帖子') # 获取帖子标题用于提示
                 if tid:
                     print(f"        -> (帖子 {thread_idx + 1}/{len(threads)}) 正在获取帖子详情: '{thread_title}' (TID:{tid})") # 增加帖子详情提示
                     detail = get_thread_detail(tid)
@@ -178,7 +178,7 @@ def process_category(category):
                 else:
                     print(f"        -> (帖子 {thread_idx + 1}/{len(threads)}) 警告: 帖子缺少 TID，跳过详情获取。标题: '{thread_title}'") # 增加缺少TID提示
                     detailed_threads.append(thread)
-                time.sleep(random.uniform(10, 30)) # 帖子详情请求之间的小随机延迟
+                # 移除: time.sleep(random.uniform(0.5, 1.5)) # 帖子详情请求之间的小随机延迟
             
             total_threads_in_subcategory.extend(detailed_threads)
             print(f"      子分类 '{group_name}' 已获取第 {page}/{total_pages} 页，共 {len(threads)} 条帖子详情。") # 更新页面获取提示
@@ -189,10 +189,10 @@ def process_category(category):
                 break
                 
             page += 1
-            # 在页面/请求组之间引入更长的随机延迟 (30-60 秒)
-            sleep_time = random.uniform(1, 3)
-            print(f"      暂停 {sleep_time:.2f} 秒，然后继续到下一页/子分类...")
-            time.sleep(sleep_time) 
+            # 移除: 在页面/请求组之间引入更长的随机延迟 (30-60 秒)
+            # 移除: sleep_time = random.uniform(30, 60)
+            # 移除: print(f"      暂停 {sleep_time:.2f} 秒，然后继续到下一页/子分类...")
+            # 移除: time.sleep(sleep_time) 
             
         # 保存当前子分类的结果
         results.append({
@@ -226,11 +226,11 @@ def main():
             for res in category_results:
                 total_threads_count += len(res['threads'])
             
-            # 在处理完一个分类后，增加 10-60 秒的随机延迟
-            if cat_idx < len(categories) - 1: # 避免在最后一个分类处理完后也等待
-                sleep_time_main_loop = random.uniform(1, 3)
-                print(f"\n<<<< 处理完分类 '{cat.get('category_name', 'N/A')}'。暂停 {sleep_time_main_loop:.2f} 秒，然后继续处理下一个分类... >>>>") # 增加分类处理完成提示
-                time.sleep(sleep_time_main_loop)
+            # 移除: 在处理完一个分类后，增加 10-60 秒的随机延迟
+            # 移除: if cat_idx < len(categories) - 1: # 避免在最后一个分类处理完后也等待
+            # 移除:    sleep_time_main_loop = random.uniform(10, 60)
+            # 移除:    print(f"\n<<<< 处理完分类 '{cat.get('category_name', 'N/A')}'。暂停 {sleep_time_main_loop:.2f} 秒，然后继续处理下一个分类... >>>>") # 增加分类处理完成提示
+            # 移除:    time.sleep(sleep_time_main_loop)
 
         except Exception as e:
             print(f"处理分类 '{cat.get('category_name', 'N/A')}' 出错: {str(e)}")
