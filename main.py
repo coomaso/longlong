@@ -148,8 +148,9 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
                 task_queue.task_done()
                 continue
                 
-            # 关键修改：使用正确的URL字段 - 'url'字段应该是API端点
+            # 关键修复：使用正确的API端点URL字段 - 'url'字段应该是包含'downDirect'的URL
             api_endpoint_url = attach.get('url')
+            
             # 获取附件名称
             attach_name = attach.get('name', f'unnamed_attachment_{tid}_{time.time()}')
             
@@ -462,12 +463,16 @@ def get_thread_detail(tid, thread_title, group_name, category_name):
             # Log detailed attachment information
             logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title} (TID:{tid})] 获取到 {len(detail['attachlist'])} 个附件")
             for idx, attach in enumerate(detail['attachlist']):
+                # 关键修复：确保使用正确的URL字段
+                api_url = attach.get('url')
+                direct_url = attach.get('attachment')
+                
                 attach_info = (
                     f"附件 {idx+1}: {attach.get('name')} | "
                     f"大小: {attach.get('filesize', 0)/1024/1024:.2f} MB | "
                     f"类型: {attach.get('filetype', '未知')} | "
-                    f"API端点: {attach.get('url')} | "
-                    f"直接链接: {attach.get('attachment')}"
+                    f"API端点: {api_url} | "
+                    f"直接链接: {direct_url}"
                 )
                 logging.info(f"    - {attach_info}")
             
@@ -514,7 +519,7 @@ def process_category(category):
                 for thread in threads:
                     tid = thread.get('tid')
                     # 修复：使用正确的标题字段
-                    thread_title = thread.get('title') or thread.get('title', '无标题帖子')
+                    thread_title = thread.get('subject') or thread.get('title', '无标题帖子')
                     
                     if not tid:
                         logging.warning(f"[分类: {category_name}][子分类: {group_name}] 帖子缺少TID: {thread_title}")
