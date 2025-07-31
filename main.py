@@ -213,6 +213,7 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
         try:
             attach = task_queue.get_nowait()
             down_direct_url = attach.get('url')
+            logging.info(f"[获取下载地址: {down_direct_url}] "
             attach_name = attach.get('name', f'unnamed_attachment_{tid}_{time.time()}')
             
             if not down_direct_url:
