@@ -51,8 +51,8 @@ def sanitize_filename(name):
 
 def get_real_download_url(down_direct_url):
     """Get the real download URL from the API endpoint"""
-    logging.debug(f"Requesting download API: {down_direct_url}")
     try:
+        logging.info(f"正在请求下载API: {down_direct_url}")
         response = make_request_with_retry('get', down_direct_url)
         
         if response is None:
@@ -70,9 +70,13 @@ def get_real_download_url(down_direct_url):
             real_url = data['result']['url']
             # Handle escaped characters in the URL
             real_url = real_url.replace('\\/', '/')
+            logging.info(f"成功获取真实下载链接: {real_url}")
             return real_url
         else:
-            logging.warning(f"获取真实下载链接失败: API返回数据不完整或有误. 响应: {data}")
+            error_msg = f"API返回错误: errNo={data.get('errNo')}, msg={data.get('msg')}"
+            if 'result' in data and 'url' not in data['result']:
+                error_msg += " - result中缺少url字段"
+            logging.warning(error_msg)
             return None
     except Exception as e:
         logging.error(f"获取真实下载链接出错: {str(e)}")
@@ -92,6 +96,7 @@ def download_file(url, file_path, max_retries=MAX_RETRIES):
     for attempt in range(max_retries):
         try:
             # Use the retry mechanism to get the file response
+            logging.info(f"开始下载文件: {url}")
             response = make_request_with_retry('get', url, stream=True)
             if response is None:
                 logging.error(f"下载文件请求失败，已达最大重试次数")
@@ -99,14 +104,25 @@ def download_file(url, file_path, max_retries=MAX_RETRIES):
 
             # Get file size
             file_size = int(response.headers.get('Content-Length', 0))
+            logging.info(f"文件大小: {file_size/1024/1024:.2f} MB")
             
             # Download the file
             with open(file_path, 'wb') as f:
                 downloaded = 0
+                start_time = time.time()
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:  # Filter out keep-alive new chunks
                         f.write(chunk)
                         downloaded += len(chunk)
+                        # Log progress every 5MB
+                        if downloaded % (5 * 1024 * 1024) == 0:
+                            elapsed = time.time() - start_time
+                            speed = downloaded / elapsed / 1024 if elapsed > 0 else 0
+                            logging.info(f"已下载: {downloaded/1024/1024:.2f} MB, 速度: {speed:.2f} KB/s")
+                
+                elapsed = time.time() - start_time
+                speed = downloaded / elapsed / 1024 if elapsed > 0 else 0
+                logging.info(f"下载完成: {downloaded/1024/1024:.2f} MB, 平均速度: {speed:.2f} KB/s, 耗时: {elapsed:.2f}秒")
             
             # Verify file size
             actual_size = os.path.getsize(file_path)
@@ -127,25 +143,39 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
     """Worker thread function for handling single attachment downloads"""
     while True:
         try:
-            attach = task_queue.get(timeout=1) # Add timeout to prevent thread from blocking
-            
-            # Use the API endpoint from 'url' to get the real download link
-            api_endpoint_url = attach.get('url')
-            
-            real_download_url = None
-            
-            # Attempt to get the real download URL from the API endpoint
-            if api_endpoint_url and 'downDirect' in api_endpoint_url:
-                logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                             f"正在请求下载接口获取真实下载链接: {api_endpoint_url}")
-                real_download_url = get_real_download_url(api_endpoint_url)
-            
-            attach_name = attach.get('name', f'unnamed_attachment_{tid}_{time.time()}')
-            
-            if not real_download_url:
-                logging.error(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] 无法从API获取有效下载链接，已跳过。")
+            attach = task_queue.get(timeout=10)  # Increase timeout to 10 seconds
+            if attach is None:
                 task_queue.task_done()
                 continue
+                
+            # 关键修改：使用正确的URL字段 - 'url'字段应该是API端点
+            api_endpoint_url = attach.get('url')
+            # 获取附件名称
+            attach_name = attach.get('name', f'unnamed_attachment_{tid}_{time.time()}')
+            
+            if not api_endpoint_url:
+                logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] 附件缺少URL")
+                task_queue.task_done()
+                continue
+            
+            # 第一步：获取真实的下载链接
+            logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                         f"正在请求下载接口获取真实下载链接: {api_endpoint_url}")
+            
+            real_url = get_real_download_url(api_endpoint_url)
+            
+            if not real_url:
+                # 尝试备用方案：使用attachment字段作为直接下载链接
+                backup_url = attach.get('attachment')
+                if backup_url and backup_url.startswith('http'):
+                    logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                                    f"尝试备用下载链接: {backup_url}")
+                    real_url = backup_url
+                else:
+                    logging.error(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                                  f"无法获取有效下载链接，已跳过。")
+                    task_queue.task_done()
+                    continue
             
             # Clean up filename
             clean_category = sanitize_filename(category_name)
@@ -164,19 +194,20 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
             
             # Download the file
             logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                         f"开始下载附件: {attach_name} ({os.path.basename(real_download_url)})")
+                         f"开始下载附件: {attach_name} ({os.path.basename(real_url)})")
             
-            success = download_file(real_download_url, save_path)
+            success = download_file(real_url, save_path)
             
             result = {
                 'name': attach_name,
                 'down_direct_url': api_endpoint_url,
-                'real_url': real_download_url,
+                'real_url': real_url,
                 'local_path': save_path if success else None,
                 'success': success
             }
             
             task_queue.task_done()
+            return result
             
         except queue.Empty:
             break
@@ -199,6 +230,9 @@ def download_attachments(attachlist, category_name, group_name, thread_title, ti
     
     total_attachments = len(attachlist)
     downloaded_files = []
+    
+    logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                 f"开始下载 {total_attachments} 个附件...")
     
     # Use a thread pool to download attachments
     with ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_DOWNLOADS, total_attachments)) as executor:
@@ -234,7 +268,7 @@ def download_attachments(attachlist, category_name, group_name, thread_title, ti
     
     return downloaded_files
 
-def make_request_with_retry(method, url, params=None, timeout=REQUEST_TIMEOUT, retries=0, stream=False):
+def make_request_with_retry(method, url, params=None, timeout=REQUEST_TIMEOUT, retries=0, stream=False, **kwargs):
     """
     HTTP request function with retry mechanism
     """
@@ -243,16 +277,23 @@ def make_request_with_retry(method, url, params=None, timeout=REQUEST_TIMEOUT, r
     
     try:
         # Add random delay to prevent too frequent requests
-        time.sleep(random.uniform(0.5, 1.5))
+        delay = random.uniform(0.5, 1.5)
+        logging.debug(f"请求前等待 {delay:.2f}秒: {url}")
+        time.sleep(delay)
         
+        logging.info(f"发送请求: {method} {url}")
         response = requests.request(
             method, 
             url, 
             headers=headers, 
             params=params, 
             timeout=timeout,
-            stream=stream # New stream parameter
+            stream=stream,
+            **kwargs
         )
+        
+        # Log response status
+        logging.info(f"收到响应: {response.status_code} {url}")
         response.raise_for_status()
         
         # Check API error code
@@ -265,6 +306,7 @@ def make_request_with_retry(method, url, params=None, timeout=REQUEST_TIMEOUT, r
                 return response
             except json.JSONDecodeError:
                 # If the response is not JSON, return it directly
+                logging.debug("响应不是JSON格式")
                 return response
         else:
             # If in stream mode, return the response directly
@@ -275,7 +317,7 @@ def make_request_with_retry(method, url, params=None, timeout=REQUEST_TIMEOUT, r
             delay = INITIAL_RETRY_DELAY * (2 ** retries) * random.uniform(0.8, 1.2)
             logging.warning(f"请求失败: {url} - {e}。第 {retries + 1}/{MAX_RETRIES} 次重试，等待 {delay:.2f} 秒...")
             time.sleep(delay)
-            return make_request_with_retry(method, url, params, timeout, retries + 1, stream=stream)
+            return make_request_with_retry(method, url, params, timeout, retries + 1, stream=stream, **kwargs)
         else:
             logging.error(f"请求失败: {url} - {e}。已达到最大重试次数 ({MAX_RETRIES})")
             return None
@@ -286,6 +328,7 @@ def get_categories():
     params = {'t': int(time.time() * 1000)}
     
     try:
+        logging.info("正在获取一级分类...")
         response = make_request_with_retry('get', url, params)
         if response is None:
             logging.error("获取分类请求失败")
@@ -317,6 +360,7 @@ def get_subcategories(category_id, category_name):
     }
     
     try:
+        logging.info(f"[分类: {category_name} (ID:{category_id})] 正在获取子分类...")
         response = make_request_with_retry('get', url, params)
         if response is None:
             logging.error("获取子分类请求失败")
@@ -351,6 +395,7 @@ def get_threads(group_id, group_name, category_name, page=1, limit=10):
     }
     
     try:
+        logging.info(f"[分类: {category_name}][子分类: {group_name} (ID:{group_id})] 正在获取第 {page} 页帖子...")
         response = make_request_with_retry('get', url, params)
         if response is None:
             logging.error(f"[分类: {category_name}][子分类: {group_name} (ID:{group_id})] 获取帖子列表请求失败")
@@ -386,6 +431,7 @@ def get_thread_detail(tid, thread_title, group_name, category_name):
         # Add random delay
         time.sleep(random.uniform(0.5, 1.5))
         
+        logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title} (TID:{tid})] 正在获取详情...")
         response = make_request_with_retry('get', url, params)
         if response is None:
             logging.error(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title} (TID:{tid})] 获取详情请求失败")
@@ -412,11 +458,18 @@ def get_thread_detail(tid, thread_title, group_name, category_name):
             # Add a check to ensure attachlist is a list
             if not isinstance(detail['attachlist'], list):
                 detail['attachlist'] = []
-
+                
+            # Log detailed attachment information
             logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title} (TID:{tid})] 获取到 {len(detail['attachlist'])} 个附件")
-            # Log the attachment URLs for debugging
             for idx, attach in enumerate(detail['attachlist']):
-                logging.info(f"    - 附件 {idx+1}: {attach.get('name')} -> URL: {attach.get('url')}")
+                attach_info = (
+                    f"附件 {idx+1}: {attach.get('name')} | "
+                    f"大小: {attach.get('filesize', 0)/1024/1024:.2f} MB | "
+                    f"类型: {attach.get('filetype', '未知')} | "
+                    f"API端点: {attach.get('url')} | "
+                    f"直接链接: {attach.get('attachment')}"
+                )
+                logging.info(f"    - {attach_info}")
             
             return detail
         else:
@@ -460,7 +513,8 @@ def process_category(category):
                 detailed_threads = []
                 for thread in threads:
                     tid = thread.get('tid')
-                    thread_title = thread.get('subject', '无标题帖子')
+                    # 修复：使用正确的标题字段
+                    thread_title = thread.get('title') or thread.get('title', '无标题帖子')
                     
                     if not tid:
                         logging.warning(f"[分类: {category_name}][子分类: {group_name}] 帖子缺少TID: {thread_title}")
@@ -487,7 +541,7 @@ def process_category(category):
                         # Calculate and log download time
                         download_time = time.time() - start_time
                         logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                                     f"附件下载耗时: {download_time:.2f}秒")
+                                     f"附件下载总耗时: {download_time:.2f}秒")
                     
                     detailed_threads.append(full_thread)
                 
@@ -538,13 +592,16 @@ def save_results_incrementally(results, filename):
         
         # Read existing data
         existing_data = []
-        if os.path.exists(filename) and os.path.getsize(filename) > 2: # Check if the file exists and is not empty
-            with open(filename, 'r', encoding='utf-8') as f:
-                try:
+        if os.path.exists(filename) and os.path.getsize(filename) > 2:  # Check if the file exists and is not empty
+            try:
+                with open(filename, 'r', encoding='utf-8') as f:
                     existing_data = json.load(f)
-                except json.JSONDecodeError:
-                    logging.warning(f"文件 {filename} 格式错误，将重新写入。")
-                    existing_data = []
+            except json.JSONDecodeError:
+                logging.warning(f"文件 {filename} 格式错误，将重新写入。")
+                existing_data = []
+            except Exception as e:
+                logging.error(f"读取文件 {filename} 出错: {str(e)}")
+                existing_data = []
 
         # Merge new and old data
         existing_data.extend(results)
@@ -553,7 +610,7 @@ def save_results_incrementally(results, filename):
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(existing_data, f, ensure_ascii=False, indent=2)
 
-        logging.info(f"数据已增量保存到 {filename}")
+        logging.info(f"数据已保存到 {filename} (共 {len(existing_data)} 条记录)")
     except Exception as e:
         logging.error(f"保存数据出错: {str(e)}")
 
@@ -576,6 +633,12 @@ def main():
     # Get all categories
     categories = get_categories()
     
+    if not categories:
+        logging.error("未获取到任何分类，程序终止")
+        return
+    
+    logging.info(f"共获取到 {len(categories)} 个一级分类")
+    
     all_results = []
     total_subcategories_count = 0
     total_threads_count = 0
@@ -588,18 +651,20 @@ def main():
         try:
             logging.info(f"处理分类 [{cat_idx+1}/{len(categories)}]: {category_name}")
             category_results = process_category(cat)
-            all_results.extend(category_results)
-            
-            # Update counts
-            total_subcategories_count += len(category_results)
-            for res in category_results:
-                total_threads_count += len(res['threads'])
+            if category_results:
+                all_results.extend(category_results)
+                save_results_incrementally(all_results, output_filename)
                 
-                # Count attachments
-                for thread in res['threads']:
-                    attachments = thread.get('downloaded_attachments', [])
-                    total_attachments_count += len(attachments)
-                    total_downloaded_attachments += sum(1 for a in attachments if a.get('success', False))
+                # Update counts
+                total_subcategories_count += len(category_results)
+                for res in category_results:
+                    total_threads_count += len(res['threads'])
+                    
+                    # Count attachments
+                    for thread in res['threads']:
+                        attachments = thread.get('downloaded_attachments', [])
+                        total_attachments_count += len(attachments)
+                        total_downloaded_attachments += sum(1 for a in attachments if a.get('success', False))
             
             # Delay between categories
             if cat_idx < len(categories) - 1:
@@ -614,8 +679,8 @@ def main():
             logging.info(f"出错后等待 {delay:.1f}秒...")
             time.sleep(delay)
     
-    # Save results after all crawling tasks are complete
-    logging.info(f"所有爬取任务完成，正在将数据保存到文件: {output_filename}...")
+    # Save final results
+    logging.info(f"所有爬取任务完成，正在将最终数据保存到文件: {output_filename}...")
     with open(output_filename, 'w', encoding='utf-8') as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
