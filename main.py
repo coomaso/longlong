@@ -16,7 +16,7 @@ TEST_MODE = True  # 启用测试模式
 MAX_TEST_PAGES = 10  # 测试时最大页面数
 MAX_TEST_SUBCATEGORIES = 2  # 测试时最大子分类数
 DOWNLOAD_ATTACHMENTS = True  # 是否下载附件
-MAX_CONCURRENT_DOWNLOADS = 2  # 每个帖子同时下载的最大附件数
+MAX_CONCURRENT_DOWNLOADS = 3  # 每个帖子同时下载的最大附件数
 MAX_RETRIES = 3  # 最大重试次数
 INITIAL_RETRY_DELAY = 3  # 初始重试延迟（秒）
 REQUEST_TIMEOUT = 15  # 请求超时时间（秒）
@@ -212,8 +212,10 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
     while not task_queue.empty():
         try:
             attach = task_queue.get_nowait()
-            down_direct_url = attach.get('url')
-            logging.info(f"获取下载地址: {down_direct_url}")
+            # 使用正确的附件URL字段
+            down_direct_url = attach.get('url')  # 这是正确的附件下载地址字段
+            
+            # 获取附件名称
             attach_name = attach.get('name', f'unnamed_attachment_{tid}_{time.time()}')
             
             if not down_direct_url:
@@ -229,14 +231,24 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
             
             # 如果主方法获取失败，尝试使用备用链接
             if not real_url:
+                # 使用attachment字段作为备用链接
                 backup_url = attach.get('attachment')
                 if backup_url and backup_url.startswith('http'):
                     logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                                    f"使用备用下载链接: {backup_url}")
-                    real_url = backup_url
+                                    f"尝试使用备用下载链接: {backup_url}")
+                    # 对备用链接也进行真实URL获取处理
+                    real_url = get_real_download_url(backup_url)
+                    if real_url:
+                        logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                                     f"通过备用链接获取到真实下载地址: {real_url}")
+                    else:
+                        logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                                      f"通过备用链接获取真实下载地址失败")
+                        task_queue.task_done()
+                        continue
                 else:
                     logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                                    f"获取真实下载链接失败")
+                                    f"获取真实下载链接失败且无有效备用链接")
                     task_queue.task_done()
                     continue
             
