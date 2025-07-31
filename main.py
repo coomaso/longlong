@@ -123,8 +123,8 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
         try:
             attach = task_queue.get(timeout=1) # 增加超时，防止线程阻塞
             
+            # 仅使用 API 端点获取真实下载链接，不再使用 attachment 字段
             api_endpoint_url = attach.get('url')
-            direct_file_url = attach.get('attachment')
             
             real_download_url = None
             
@@ -134,15 +134,10 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
                              f"正在请求下载接口获取真实下载链接: {api_endpoint_url}")
                 real_download_url = get_real_download_url(api_endpoint_url)
             
-            # 如果从 API 获取失败，则退回到直接文件链接
-            if not real_download_url and direct_file_url:
-                logging.warning(f"无法从API获取链接，尝试使用直接下载链接: {direct_file_url}")
-                real_download_url = direct_file_url
-            
             attach_name = attach.get('name', f'unnamed_attachment_{tid}_{time.time()}')
             
             if not real_download_url:
-                logging.error(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] 无法获取附件的有效下载链接，已跳过。")
+                logging.error(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] 无法从API获取有效下载链接，已跳过。")
                 task_queue.task_done()
                 continue
             
