@@ -227,7 +227,7 @@ def process_category(category):
                 detailed_threads = []
                 for thread in threads:
                     tid = thread.get('tid')
-                    thread_title = thread.get('subject', '无标题帖子')
+                    thread_title = thread.get('title', '无标题帖子')
                     if tid:
                         detail = get_thread_detail(tid, thread_title, group_name, category_name)
                         full_thread = {**thread, **detail}
