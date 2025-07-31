@@ -118,42 +118,47 @@ def process_category(category):
     category_id = category['id']
     category_name = category['category_name']
     
-    print(f"\n开始处理分类: {category_name}(ID:{category_id})")
+    print(f"\n>>>> 开始处理分类: {category_name} (ID:{category_id}) <<<<") # 增加提示
     subcategories = get_subcategories(category_id)
     
     results = []
-    for sub in subcategories:
+    for sub_idx, sub in enumerate(subcategories): # 增加子分类索引
         group_id = sub['group_id']
         group_name = sub['group_name']
         page = 1
         total_threads_in_subcategory = []
         
-        print(f"  └─ 获取子分类: {group_name}(ID:{group_id})")
+        print(f"  └─ ({sub_idx + 1}/{len(subcategories)}) 正在获取子分类: {group_name} (ID:{group_id})") # 增加子分类提示
         
         # 分页获取所有帖子
         while True:
             threads, total_pages = get_threads(group_id, page)
             if not threads:
+                print(f"      子分类 '{group_name}' (ID:{group_id}) 在第 {page} 页没有更多帖子。") # 增加没有更多帖子提示
                 break
                 
             # 为每个帖子获取详细信息
             detailed_threads = []
-            for thread in threads:
+            for thread_idx, thread in enumerate(threads): # 增加帖子索引
                 tid = thread.get('tid')
+                thread_title = thread.get('subject', '无标题帖子') # 获取帖子标题用于提示
                 if tid:
+                    print(f"        -> (帖子 {thread_idx + 1}/{len(threads)}) 正在获取帖子详情: '{thread_title}' (TID:{tid})") # 增加帖子详情提示
                     detail = get_thread_detail(tid)
                     # 合并基本信息和详细信息
                     full_thread = {**thread, **detail}
                     detailed_threads.append(full_thread)
                 else:
+                    print(f"        -> (帖子 {thread_idx + 1}/{len(threads)}) 警告: 帖子缺少 TID，跳过详情获取。标题: '{thread_title}'") # 增加缺少TID提示
                     detailed_threads.append(thread)
                 time.sleep(random.uniform(0.5, 1.5)) # 帖子详情请求之间的小随机延迟
             
             total_threads_in_subcategory.extend(detailed_threads)
-            print(f"      第 {page}/{total_pages} 页, 获取到 {len(threads)} 条帖子详情")
+            print(f"      子分类 '{group_name}' 已获取第 {page}/{total_pages} 页，共 {len(threads)} 条帖子详情。") # 更新页面获取提示
             
             # 检查是否还有下一页
             if page >= total_pages:
+                print(f"      子分类 '{group_name}' (ID:{group_id}) 所有 {total_pages} 页帖子已获取完毕。") # 增加所有页面获取完毕提示
                 break
                 
             page += 1
@@ -183,8 +188,9 @@ def main():
     total_threads_count = 0
 
     # 循环处理每个分类（单线程）
-    for cat in categories:
+    for cat_idx, cat in enumerate(categories): # 增加分类索引
         try:
+            print(f"\n===== 正在处理第 {cat_idx + 1}/{len(categories)} 个一级分类 =====") # 增加主循环分类提示
             category_results = process_category(cat) 
             all_results.extend(category_results)
             
@@ -194,9 +200,9 @@ def main():
                 total_threads_count += len(res['threads'])
             
             # 在处理完一个分类后，增加 10-60 秒的随机延迟
-            if cat != categories[-1]: # 避免在最后一个分类处理完后也等待
+            if cat_idx < len(categories) - 1: # 避免在最后一个分类处理完后也等待
                 sleep_time_main_loop = random.uniform(10, 60)
-                print(f"\n处理完分类 '{cat.get('category_name', 'N/A')}'。暂停 {sleep_time_main_loop:.2f} 秒，然后继续处理下一个分类...")
+                print(f"\n<<<< 处理完分类 '{cat.get('category_name', 'N/A')}'。暂停 {sleep_time_main_loop:.2f} 秒，然后继续处理下一个分类... >>>>") # 增加分类处理完成提示
                 time.sleep(sleep_time_main_loop)
 
         except Exception as e:
@@ -204,6 +210,7 @@ def main():
                 
     # 将结果保存到 JSON 文件
     output_filename = 'zhulong_full_data.json'
+    print(f"\n\n正在将所有爬取到的数据保存到文件: {output_filename}...") # 增加保存文件提示
     with open(output_filename, 'w', encoding='utf-8') as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
     
