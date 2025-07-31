@@ -4,18 +4,19 @@ import json
 import random
 import os
 import re
-import urllib.parse
 from datetime import datetime
 import logging
+import threading
 import queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import urllib.parse
 
 # 全局配置
 TEST_MODE = True  # 启用测试模式
 MAX_TEST_PAGES = 10  # 测试时最大页面数
 MAX_TEST_SUBCATEGORIES = 2  # 测试时最大子分类数
 DOWNLOAD_ATTACHMENTS = True  # 是否下载附件
-MAX_CONCURRENT_DOWNLOADS = 3  # 每个帖子同时下载的最大附件数
+MAX_CONCURRENT_DOWNLOADS = 2  # 每个帖子同时下载的最大附件数
 MAX_RETRIES = 3  # 最大重试次数
 INITIAL_RETRY_DELAY = 3  # 初始重试延迟（秒）
 REQUEST_TIMEOUT = 15  # 请求超时时间（秒）
@@ -48,8 +49,52 @@ def sanitize_filename(name):
     # 移除Windows文件名中不允许的字符
     return re.sub(r'[\\/*?:"<>|]', "", name)
 
+def make_request_with_retry(method, url, params=None, timeout=REQUEST_TIMEOUT, 
+                            retries=0, **kwargs):
+    """
+    带重试机制的 HTTP 请求函数（支持额外参数）
+    """
+    # 动态设置Cookie
+    headers['Cookie'] = get_dynamic_cookie()
+    
+    try:
+        # 添加随机延迟避免请求过于频繁
+        time.sleep(random.uniform(0.5, 1.5))
+        
+        response = requests.request(
+            method, 
+            url, 
+            headers=headers, 
+            params=params, 
+            timeout=timeout,
+            **kwargs  # 传递额外参数
+        )
+        response.raise_for_status()
+        
+        # 检查API错误码
+        try:
+            if 'application/json' in response.headers.get('Content-Type', ''):
+                data = response.json()
+                if data.get('errNo') != 0:
+                    logging.warning(f"API返回错误: {data.get('msg')} (errNo: {data.get('errNo')})")
+                    raise requests.exceptions.RequestException(f"API Error: {data.get('msg')}")
+            return response
+        except json.JSONDecodeError:
+            # 如果响应不是JSON，直接返回
+            return response
+            
+    except requests.exceptions.RequestException as e:
+        if retries < MAX_RETRIES:
+            delay = INITIAL_RETRY_DELAY * (2 ** retries) * random.uniform(0.8, 1.2)
+            logging.warning(f"请求失败: {url} - {e}。第 {retries + 1}/{MAX_RETRIES} 次重试，等待 {delay:.2f} 秒...")
+            time.sleep(delay)
+            return make_request_with_retry(method, url, params, timeout, retries + 1, **kwargs)
+        else:
+            logging.error(f"请求失败: {url} - {e}。已达到最大重试次数 ({MAX_RETRIES})")
+            return None
+
 def get_real_download_url(down_direct_url):
-    """获取真实的下载链接"""
+    """获取真实的下载链接（优化版）"""
     try:
         # 添加随机延迟
         time.sleep(random.uniform(0.5, 1.5))
@@ -57,41 +102,54 @@ def get_real_download_url(down_direct_url):
         # 设置动态Cookie
         headers['Cookie'] = get_dynamic_cookie()
         
-        # 记录请求的URL
-        logging.debug(f"请求下载接口: {down_direct_url}")
-        
-        response = requests.get(
+        # 使用带重试机制的请求
+        response = make_request_with_retry(
+            'get', 
             down_direct_url,
-            headers=headers,
-            timeout=REQUEST_TIMEOUT
+            allow_redirects=False  # 禁止自动重定向
         )
-        response.raise_for_status()
-        
-        # 记录响应状态
-        logging.debug(f"接口响应状态: {response.status_code}")
-        
-        data = response.json()
-        if data.get('errNo') == 0:
-            real_url = data['result']['url']
-            # 处理URL中的转义字符
-            real_url = real_url.replace('\\/', '/')
-            
-            # 解码URL编码的字符
-            try:
-                real_url = urllib.parse.unquote(real_url)
-            except Exception as e:
-                logging.warning(f"URL解码失败: {str(e)}")
-            
-            # 记录获取到的真实URL
-            logging.info(f"获取真实下载链接: {real_url}")
-            return real_url
-        else:
-            logging.warning(f"获取真实下载链接失败: {data.get('msg')}")
+        if response is None:
+            logging.warning("获取真实下载链接请求失败")
             return None
-    except json.JSONDecodeError:
-        # 如果响应不是JSON，可能是直接文件链接
-        logging.info(f"直接文件链接: {down_direct_url}")
-        return down_direct_url
+            
+        # 处理重定向响应 (3xx)
+        if response.status_code in (301, 302, 303, 307, 308):
+            redirect_url = response.headers.get('Location')
+            if redirect_url:
+                logging.debug(f"重定向到: {redirect_url}")
+                return redirect_url
+            else:
+                logging.warning("重定向响应中缺少Location头")
+                return None
+                
+        # 处理JSON响应
+        if 'application/json' in response.headers.get('Content-Type', ''):
+            try:
+                data = response.json()
+                if data.get('errNo') == 0:
+                    real_url = data['result']['url']
+                    # 处理URL中的转义字符
+                    real_url = real_url.replace('\\/', '/')
+                    return real_url
+                else:
+                    logging.warning(f"API返回错误: {data.get('msg')} (errNo: {data.get('errNo')})")
+                    return None
+            except json.JSONDecodeError:
+                logging.error("JSON解析失败，响应内容: " + response.text[:500])
+                return None
+                
+        # 处理直接返回下载链接的情况
+        if response.status_code == 200:
+            # 检查响应内容是否是有效的URL
+            content = response.text.strip()
+            if content.startswith(('http://', 'https://')):
+                return content
+                
+        # 处理其他情况
+        logging.warning(f"无法处理的响应: 状态码={response.status_code}, "
+                       f"Content-Type={response.headers.get('Content-Type')}")
+        return None
+        
     except Exception as e:
         logging.error(f"获取真实下载链接出错: {str(e)}")
         return None
@@ -114,9 +172,6 @@ def download_file(url, file_path, max_retries=MAX_RETRIES):
             
             # 添加随机延迟
             time.sleep(random.uniform(0.5, 1.5))
-            
-            # 记录下载请求
-            logging.debug(f"下载请求: {url}")
             
             response = requests.get(
                 url, 
@@ -144,7 +199,6 @@ def download_file(url, file_path, max_retries=MAX_RETRIES):
                 os.remove(file_path)  # 删除不完整的文件
                 continue
             
-            logging.info(f"文件下载成功: {file_path} ({actual_size} 字节)")
             return True
             
         except Exception as e:
@@ -168,14 +222,22 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
             
             # 第一步：获取真实的下载链接
             logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                         f"处理附件: {attach_name}")
+                         f"获取真实下载链接: {down_direct_url}")
             
             real_url = get_real_download_url(down_direct_url)
+            
+            # 如果主方法获取失败，尝试使用备用链接
             if not real_url:
-                logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                                f"获取下载链接失败")
-                task_queue.task_done()
-                continue
+                backup_url = attach.get('attachment')
+                if backup_url and backup_url.startswith('http'):
+                    logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                                    f"使用备用下载链接: {backup_url}")
+                    real_url = backup_url
+                else:
+                    logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                                    f"获取真实下载链接失败")
+                    task_queue.task_done()
+                    continue
             
             # 清理文件名
             clean_category = sanitize_filename(category_name)
@@ -194,14 +256,14 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
             
             # 第二步：下载文件
             logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                         f"开始下载: {os.path.basename(real_url)}")
+                         f"开始下载附件: {attach_name} ({os.path.basename(real_url)})")
             
             success = download_file(real_url, save_path)
             
             result = {
                 'name': attach_name,
-                'original_url': down_direct_url,
-                'final_url': real_url,
+                'down_direct_url': down_direct_url,
+                'real_url': real_url,
                 'local_path': save_path if success else None,
                 'success': success
             }
@@ -263,47 +325,6 @@ def download_attachments(attachlist, category_name, group_name, thread_title, ti
                         f"附件下载失败: 0/{total_attachments} 成功")
     
     return downloaded_files
-
-def make_request_with_retry(method, url, params=None, timeout=REQUEST_TIMEOUT, retries=0):
-    """
-    带重试机制的 HTTP 请求函数
-    """
-    # 动态设置Cookie
-    headers['Cookie'] = get_dynamic_cookie()
-    
-    try:
-        # 添加随机延迟避免请求过于频繁
-        time.sleep(random.uniform(0.5, 1.5))
-        
-        response = requests.request(
-            method, 
-            url, 
-            headers=headers, 
-            params=params, 
-            timeout=timeout
-        )
-        response.raise_for_status()
-        
-        # 检查API错误码
-        try:
-            data = response.json()
-            if data.get('errNo') != 0:
-                logging.warning(f"API返回错误: {data.get('msg')} (errNo: {data.get('errNo')})")
-                raise requests.exceptions.RequestException(f"API Error: {data.get('msg')}")
-            return response
-        except json.JSONDecodeError:
-            # 如果响应不是JSON，直接返回
-            return response
-            
-    except requests.exceptions.RequestException as e:
-        if retries < MAX_RETRIES:
-            delay = INITIAL_RETRY_DELAY * (2 ** retries) * random.uniform(0.8, 1.2)
-            logging.warning(f"请求失败: {url} - {e}。第 {retries + 1}/{MAX_RETRIES} 次重试，等待 {delay:.2f} 秒...")
-            time.sleep(delay)
-            return make_request_with_retry(method, url, params, timeout, retries + 1)
-        else:
-            logging.error(f"请求失败: {url} - {e}。已达到最大重试次数 ({MAX_RETRIES})")
-            return None
 
 def get_categories():
     """获取所有一级分类"""
@@ -521,7 +542,7 @@ def process_category(category):
                 # 页面间延迟
                 if page <= total_pages:
                     delay = random.uniform(3, 8)  # 测试模式下缩短延迟
-                    logging.info(f"[分类: {category_name}][子分类: {group_name}] 等待 {delay:.2f}秒后获取下一页...")
+                    logging.info(f"[分类: {category_name}][子分类: {group_name}] 等待 {delay:.1f}秒后获取下一页...")
                     time.sleep(delay)
                     
             except Exception as e:
@@ -655,8 +676,6 @@ def main():
 
 if __name__ == "__main__":
     try:
-        # 启用详细日志以帮助调试
-        logging.getLogger().setLevel(logging.DEBUG)
         main()
     except KeyboardInterrupt:
         logging.info("程序被用户中断")
