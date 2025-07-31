@@ -619,4 +619,23 @@ def main():
     with open(output_filename, 'w', encoding='utf-8') as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-    # Fi
+    # Final summary
+    logging.info("\n" + "=" * 50)
+    logging.info("爬取摘要:")
+    logging.info(f"处理了 {len(categories)} 个一级分类")
+    logging.info(f"找到了 {total_subcategories_count} 个子分类")
+    logging.info(f"总共收集了 {total_threads_count} 条帖子")
+    if DOWNLOAD_ATTACHMENTS:
+        logging.info(f"发现 {total_attachments_count} 个附件")
+        logging.info(f"成功下载 {total_downloaded_attachments} 个附件")
+    logging.info(f"结果已保存到: {output_filename}")
+    logging.info(f"附件保存到: downloads/ 目录")
+    logging.info("=" * 50)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        logging.info("程序被用户中断")
+    except Exception as e:
+        logging.error(f"程序发生未处理异常: {str(e)}")
