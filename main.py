@@ -9,17 +9,17 @@ import logging
 import threading
 import queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import unquote # 导入unquote以解码URL
+from urllib.parse import unquote
 
 # Global Configuration
-TEST_MODE = True  # Enable test mode
-MAX_TEST_PAGES = 10  # Max pages in test mode
-MAX_TEST_SUBCATEGORIES = 2  # Max subcategories in test mode
-DOWNLOAD_ATTACHMENTS = True  # Whether to download attachments
-MAX_CONCURRENT_DOWNLOADS = 3  # Max concurrent downloads per post
-MAX_RETRIES = 3  # Max retries
-INITIAL_RETRY_DELAY = 3  # Initial retry delay in seconds
-REQUEST_TIMEOUT = 15  # Request timeout in seconds
+TEST_MODE = True
+MAX_TEST_PAGES = 10
+MAX_TEST_SUBCATEGORIES = 2
+DOWNLOAD_ATTACHMENTS = True
+MAX_CONCURRENT_DOWNLOADS = 3
+MAX_RETRIES = 3
+INITIAL_RETRY_DELAY = 3
+REQUEST_TIMEOUT = 15
 
 # Configure logging
 logging.basicConfig(
@@ -40,79 +40,54 @@ headers = {
 
 # Dynamic Cookie Management
 def get_dynamic_cookie():
-    """Generate or update a Cookie - Test version"""
-    # Use a simple Cookie here, should be dynamically retrieved in a real project
     return 'Hm_lvt_b4c6201caa3cb2837f622d668e688cfd=1751961635; HMACCOUNT=FB83163D0F4ABA49;'
 
 def sanitize_filename(name):
-    """Clean up illegal characters in filenames"""
-    # Remove characters not allowed in Windows filenames
     return re.sub(r'[\\/*?:"<>|]', "", name)
 
 def download_file(url, file_path, max_retries=MAX_RETRIES):
-    """
-    Download a file and save it to the specified path
-    :param url: File URL
-    :param file_path: Local save path
-    :param max_retries: Max retries
-    :return: True on success, False on failure
-    """
-    # Ensure the directory exists
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     
     for attempt in range(max_retries):
         try:
-            # Use the retry mechanism to get the file response
             response = make_request_with_retry('get', url, stream=True)
             if response is None:
                 logging.error(f"下载文件请求失败，已达最大重试次数")
                 return False
 
-            # Get file size
             file_size = int(response.headers.get('Content-Length', 0))
             
-            # Download the file
             with open(file_path, 'wb') as f:
                 downloaded = 0
                 for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:  # Filter out keep-alive new chunks
+                    if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
             
-            # Verify file size
             actual_size = os.path.getsize(file_path)
             if file_size > 0 and actual_size != file_size:
                 logging.warning(f"文件大小不匹配: 预期 {file_size} 字节, 实际 {actual_size} 字节")
-                os.remove(file_path)  # Delete incomplete file
+                os.remove(file_path)
                 continue
             
             return True
             
         except Exception as e:
             logging.error(f"下载文件失败 (尝试 {attempt+1}/{max_retries}): {str(e)}")
-            time.sleep(2 ** attempt)  # Exponential backoff
+            time.sleep(2 ** attempt)
     
     return False
 
-# 新增函数：获取附件下载信息
 def get_attachment_download_info(tid):
-    """
-    获取指定帖子的附件下载信息，包括文件名和下载URL
-    :param tid: 帖子ID
-    :return: 包含文件信息的字典，或 None
-    """
     url = "https://www.zhulong.com/bbs/prod-api/attachment/attachment/downLog"
-    # 使用tid作为referer
     api_headers = {**headers, "Referer": f"https://www.zhulong.com/bbs/d/{tid}.html"}
 
     try:
-        # 使用带重试机制的请求
         response = make_request_with_retry('get', url, params={"tid": tid}, headers=api_headers, timeout=REQUEST_TIMEOUT)
         if response is None:
             logging.error(f"获取下载信息请求失败，已达最大重试次数")
             return None
 
-        # 检查API返回数据
         data = response.json()
         if data.get("errNo") == 0 and data.get("result") and data["result"].get("attachments"):
             attachments = data["result"]["attachments"]
@@ -123,13 +98,12 @@ def get_attachment_download_info(tid):
                 download_url = item.get("url")
 
                 if download_url:
-                    # 解码下载链接中的特殊字符
                     download_url = unquote(download_url)
                     file_info.append({"filename": filename, "download_url": download_url})
 
             return {
                 "tid": tid,
-                "title": data["result"]["title"],
+                "title": data["result"].get("title", ""),
                 "files": file_info
             }
         else:
@@ -140,10 +114,8 @@ def get_attachment_download_info(tid):
     return None
 
 def download_worker(task_queue, category_name, group_name, thread_title, tid):
-    """工作线程函数，处理单个附件下载"""
     while True:
         try:
-            # 现在任务队列中的项直接就是包含 download_url 的字典
             file_item = task_queue.get(timeout=1)
             attach_name = file_item['filename']
             download_url = file_item['download_url']
@@ -153,13 +125,11 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
                 task_queue.task_done()
                 continue
             
-            # 清理文件名
             clean_category = sanitize_filename(category_name)
             clean_group = sanitize_filename(group_name)
             clean_title = sanitize_filename(thread_title)
             clean_name = sanitize_filename(attach_name)
             
-            # 构建保存路径
             save_path = os.path.join(
                 "downloads",
                 clean_category,
@@ -168,7 +138,6 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
                 clean_name
             )
             
-            # 下载文件
             logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
                          f"开始下载附件: {attach_name} ({os.path.basename(download_url)})")
             
@@ -183,6 +152,7 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
             }
             
             task_queue.task_done()
+            return result
             
         except queue.Empty:
             break
@@ -194,11 +164,9 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
     return None
 
 def download_attachments(files_to_download, category_name, group_name, thread_title, tid):
-    """并发下载帖子的所有附件"""
     if not DOWNLOAD_ATTACHMENTS or not files_to_download:
         return []
     
-    # 创建任务队列
     task_queue = queue.Queue()
     for file_item in files_to_download:
         task_queue.put(file_item)
@@ -206,7 +174,6 @@ def download_attachments(files_to_download, category_name, group_name, thread_ti
     total_attachments = len(files_to_download)
     downloaded_files = []
     
-    # 使用线程池下载附件
     with ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_DOWNLOADS, total_attachments)) as executor:
         futures = []
         for _ in range(min(MAX_CONCURRENT_DOWNLOADS, total_attachments)):
@@ -220,16 +187,13 @@ def download_attachments(files_to_download, category_name, group_name, thread_ti
             )
             futures.append(future)
         
-        # 等待所有任务完成
         task_queue.join()
         
-        # 收集结果
         for future in as_completed(futures):
             result = future.result()
             if result:
                 downloaded_files.append(result)
     
-    # 统计下载结果
     success_count = sum(1 for f in downloaded_files if f.get('success', False))
     if success_count > 0:
         logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
@@ -241,18 +205,12 @@ def download_attachments(files_to_download, category_name, group_name, thread_ti
     return downloaded_files
 
 def make_request_with_retry(method, url, params=None, headers=None, timeout=REQUEST_TIMEOUT, retries=0, stream=False):
-    """
-    带重试机制的 HTTP 请求函数
-    """
-    # 动态设置Cookie
     cookies = get_dynamic_cookie()
     
-    # 如果没有传入headers，使用全局headers
     if headers is None:
         headers = globals()['headers']
 
     try:
-        # 添加随机延迟避免请求过于频繁
         time.sleep(random.uniform(0.5, 1.5))
         
         response = requests.request(
@@ -260,25 +218,22 @@ def make_request_with_retry(method, url, params=None, headers=None, timeout=REQU
             url, 
             headers=headers, 
             params=params,
-            cookies=cookies,
+            cookies={'Cookie': cookies},
             timeout=timeout,
-            stream=stream # 新增 stream 参数
+            stream=stream
         )
         response.raise_for_status()
         
-        # 检查API错误码
         if not stream:
             try:
                 data = response.json()
-                if data.get('errNo') != 0:
+                if isinstance(data, dict) and data.get('errNo') != 0:
                     logging.warning(f"API返回错误: {data.get('msg')} (errNo: {data.get('errNo')})")
                     raise requests.exceptions.RequestException(f"API Error: {data.get('msg')}")
                 return response
             except json.JSONDecodeError:
-                # If the response is not JSON, return it directly
                 return response
         else:
-            # If in stream mode, return the response directly
             return response
             
     except requests.exceptions.RequestException as e:
@@ -292,18 +247,28 @@ def make_request_with_retry(method, url, params=None, headers=None, timeout=REQU
             return None
 
 def get_categories():
-    """获取所有一级分类"""
     url = "https://www.zhulong.com/bbs/prod-api/home/resource/category"
     params = {'t': int(time.time() * 1000)}
     
     try:
+        logging.info("正在获取一级分类...")
         response = make_request_with_retry('get', url, params)
         if response is None:
             logging.error("获取分类请求失败")
             return []
-            
-        data = response.json()
         
+        # 确保响应是JSON格式
+        try:
+            data = response.json()
+        except json.JSONDecodeError:
+            logging.error(f"API返回非JSON响应: {response.text[:200]}")
+            return []
+        
+        # 检查data是否为字典
+        if not isinstance(data, dict):
+            logging.error(f"API返回的数据类型错误，期望字典，实际得到: {type(data)}")
+            return []
+
         if data.get('errNo') == 0:
             categories = data.get('result', [])
             if not isinstance(categories, list):
@@ -312,7 +277,6 @@ def get_categories():
 
             logging.info(f"获取到 {len(categories)} 个一级分类")
             
-            # 测试模式下只返回前2个分类
             if TEST_MODE:
                 return categories[:2]
             return categories
@@ -324,7 +288,6 @@ def get_categories():
         return []
 
 def get_subcategories(category_id, category_name):
-    """获取指定分类的子分类"""
     url = "https://www.zhulong.com/bbs/prod-api/home/resource/group"
     params = {
         'category_id': category_id,
@@ -336,9 +299,17 @@ def get_subcategories(category_id, category_name):
         if response is None:
             logging.error("获取子分类请求失败")
             return []
-            
-        data = response.json()
         
+        try:
+            data = response.json()
+        except json.JSONDecodeError:
+            logging.error(f"API返回非JSON响应: {response.text[:200]}")
+            return []
+            
+        if not isinstance(data, dict):
+            logging.error(f"API返回的数据类型错误，期望字典，实际得到: {type(data)}")
+            return []
+            
         if data.get('errNo') == 0:
             subcategories = data.get('result', [])
             if not isinstance(subcategories, list):
@@ -347,7 +318,6 @@ def get_subcategories(category_id, category_name):
             
             logging.info(f"[分类: {category_name} (ID:{category_id})] 获取到 {len(subcategories)} 个子分类")
             
-            # 测试模式下只返回前2个子分类
             if TEST_MODE:
                 return subcategories[:MAX_TEST_SUBCATEGORIES]
             return subcategories
@@ -359,7 +329,6 @@ def get_subcategories(category_id, category_name):
         return []
 
 def get_threads(group_id, group_name, category_name, page=1, limit=10):
-    """获取指定子分类的帖子内容"""
     url = "https://www.zhulong.com/bbs/prod-api/group/group/getGroupThreadTag"
     params = {
         'gid': group_id,
@@ -374,16 +343,21 @@ def get_threads(group_id, group_name, category_name, page=1, limit=10):
         if response is None:
             logging.error(f"[分类: {category_name}][子分类: {group_name} (ID:{group_id})] 获取帖子列表请求失败")
             return [], 1
-            
-        data = response.json()
         
+        try:
+            data = response.json()
+        except json.JSONDecodeError:
+            logging.error(f"API返回非JSON响应: {response.text[:200]}")
+            return [], 1
+            
+        if not isinstance(data, dict):
+            logging.error(f"API返回的数据类型错误，期望字典，实际得到: {type(data)}")
+            return [], 1
+            
         if data.get('errNo') == 0:
-            # 提取帖子列表
             thread_list = data.get('result', {}).get('thread', {}).get('list', [])
-            # 提取总页数用于翻页
             total_pages = data.get('result', {}).get('thread', {}).get('maxPage', 1)
             
-            # 测试模式下限制最大页数
             if TEST_MODE and total_pages > MAX_TEST_PAGES:
                 total_pages = MAX_TEST_PAGES
                 
@@ -397,43 +371,46 @@ def get_threads(group_id, group_name, category_name, page=1, limit=10):
         return [], 1
 
 def get_thread_detail(tid, thread_title, group_name, category_name):
-    """获取帖子详细信息"""
     url = f"https://www.zhulong.com/bbs/prod-api/thread/thread/getThreadForTid?tid={tid}"
     params = {'t': int(time.time() * 1000)}
     
     try:
-        # Add random delay
         time.sleep(random.uniform(0.5, 1.5))
         
         response = make_request_with_retry('get', url, params)
         if response is None:
             logging.error(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title} (TID:{tid})] 获取详情请求失败")
             return {}
-            
-        data = response.json()
         
+        try:
+            data = response.json()
+        except json.JSONDecodeError:
+            logging.error(f"API返回非JSON响应: {response.text[:200]}")
+            return {}
+            
+        if not isinstance(data, dict):
+            logging.error(f"API返回的数据类型错误，期望字典，实际得到: {type(data)}")
+            return {}
+            
         if data.get('errNo') == 0:
             result = data.get('result', {})
             
-            # 提取所需详细信息
             detail = {
                 'content': result.get('content', ''),
                 'tags': result.get('tags', ''),
                 'message': result.get('message', ''),
                 'attachlist': result.get('attachlist', []),
-                'hot': result.get('sum_hot', []), # Hotness
-                'star': result.get('star', []), # Star rating
+                'hot': result.get('sum_hot', []),
+                'star': result.get('star', []),
                 'pics': result.get('picsArray', []),
                 'group_name': result.get('group_name', ''),
                 'pic': result.get('pic', '')
             }
             
-            # 增加一个检查，确保attachlist是一个列表
             if not isinstance(detail['attachlist'], list):
                 detail['attachlist'] = []
 
             logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title} (TID:{tid})] 获取到 {len(detail['attachlist'])} 个附件")
-            # Log the attachment URLs for debugging
             for idx, attach in enumerate(detail['attachlist']):
                 logging.info(f"    - 附件 {idx+1}: {attach.get('name')} -> URL: {attach.get('url')}")
             
@@ -446,7 +423,6 @@ def get_thread_detail(tid, thread_title, group_name, category_name):
         return {}
 
 def process_category(category):
-    """处理单个分类及其子分类"""
     category_id = category['id']
     category_name = category['category_name']
     
@@ -466,7 +442,6 @@ def process_category(category):
         
         logging.info(f"[分类: {category_name}] 处理子分类: {group_name} (ID:{group_id}) [{sub_idx+1}/{len(subcategories)}]")
         
-        # Paginate to get all threads
         while True:
             try:
                 threads, total_pages = get_threads(group_id, group_name, category_name, page)
@@ -475,7 +450,6 @@ def process_category(category):
                         logging.warning(f"[分类: {category_name}][子分类: {group_name} (ID:{group_id})] 第一页无数据")
                     break
                     
-                # Get detailed information for each thread
                 detailed_threads = []
                 for thread in threads:
                     tid = thread.get('tid')
@@ -486,20 +460,15 @@ def process_category(category):
                         detailed_threads.append(thread)
                         continue
                         
-                    # Get thread details
                     detail = get_thread_detail(tid, thread_title, group_name, category_name)
                     full_thread = {**thread, **detail}
                     
-                    # Download attachments (if any)
                     if 'attachlist' in detail and detail['attachlist']:
-                        # Log start time
                         start_time = time.time()
                         
-                        # 新逻辑: 获取附件下载信息
                         attachment_download_info = get_attachment_download_info(tid)
                         
                         if attachment_download_info:
-                            # 传入新的附件信息列表给下载函数
                             downloaded = download_attachments(
                                 attachment_download_info['files'], 
                                 category_name, 
@@ -512,7 +481,6 @@ def process_category(category):
                             logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] 无法获取附件下载信息，跳过下载。")
                             full_thread['downloaded_attachments'] = []
                         
-                        # 计算并记录下载耗时
                         download_time = time.time() - start_time
                         logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
                                      f"附件下载耗时: {download_time:.2f}秒")
@@ -522,16 +490,14 @@ def process_category(category):
                 total_threads_in_subcategory.extend(detailed_threads)
                 logging.info(f"[分类: {category_name}][子分类: {group_name}] 第 {page}/{total_pages} 页完成, 累计帖子数: {len(total_threads_in_subcategory)}")
                 
-                # Check if there are more pages
                 if page >= total_pages:
                     logging.info(f"[分类: {category_name}][子分类: {group_name}] 所有页面获取完成")
                     break
                     
                 page += 1
                 
-                # Delay between pages
                 if page <= total_pages:
-                    delay = random.uniform(3, 8)  # Shorten delay in test mode
+                    delay = random.uniform(3, 8)
                     logging.info(f"[分类: {category_name}][子分类: {group_name}] 等待 {delay:.1f}秒后获取下一页...")
                     time.sleep(delay)
                     
@@ -539,7 +505,6 @@ def process_category(category):
                 logging.error(f"[分类: {category_name}][子分类: {group_name}] 处理出错: {str(e)}")
                 break
         
-        # Save results for the current subcategory
         results.append({
             'category_id': category_id,
             'category_name': category_name,
@@ -548,9 +513,8 @@ def process_category(category):
             'threads': total_threads_in_subcategory
         })
         
-        # Delay between subcategories
         if sub_idx < len(subcategories) - 1:
-            delay = random.uniform(5, 15)  # Shorten delay in test mode
+            delay = random.uniform(5, 15)
             logging.info(f"[分类: {category_name}] 等待 {delay:.1f}秒后处理下一个子分类...")
             time.sleep(delay)
     
@@ -558,26 +522,21 @@ def process_category(category):
     return results
 
 def save_results_incrementally(results, filename):
-    """Save results incrementally to a file"""
     try:
         if not results:
             logging.info("没有结果需要保存")
             return
         
-        # Read existing data
         existing_data = []
-        if os.path.exists(filename) and os.path.getsize(filename) > 2: # Check if the file exists and is not empty
-            with open(filename, 'r', encoding='utf-8') as f:
-                try:
+        if os.path.exists(filename) and os.path.getsize(filename) > 2:
+            try:
+                with open(filename, 'r', encoding='utf-8') as f:
                     existing_data = json.load(f)
-                except json.JSONDecodeError:
-                    logging.warning(f"文件 {filename} 格式错误，将重新写入。")
-                    existing_data = []
+            except (json.JSONDecodeError, Exception):
+                existing_data = []
 
-        # Merge new and old data
         existing_data.extend(results)
 
-        # Write the entire file
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(existing_data, f, ensure_ascii=False, indent=2)
 
@@ -585,11 +544,9 @@ def save_results_incrementally(results, filename):
     except Exception as e:
         logging.error(f"保存数据出错: {str(e)}")
 
-
 def main():
-    output_filename = 'zhulong_full_data.json' if TEST_MODE else 'zhulong_test_data.json'
+    output_filename = 'zhulong_test_data.json' if TEST_MODE else 'zhulong_full_data.json'
     
-    # Ensure the downloads directory exists
     os.makedirs('downloads', exist_ok=True)
     
     logging.info("=" * 50)
@@ -601,8 +558,13 @@ def main():
         logging.info(f"并发下载: 每个帖子最多同时下载 {MAX_CONCURRENT_DOWNLOADS} 个附件")
     logging.info("=" * 50)
     
-    # Get all categories
     categories = get_categories()
+    
+    if not categories:
+        logging.error("未获取到任何分类，程序终止")
+        return
+    
+    logging.info(f"共获取到 {len(categories)} 个一级分类")
     
     all_results = []
     total_subcategories_count = 0
@@ -610,44 +572,40 @@ def main():
     total_attachments_count = 0
     total_downloaded_attachments = 0
 
-    # Loop through each category
     for cat_idx, cat in enumerate(categories):
         category_name = cat['category_name']
         try:
             logging.info(f"处理分类 [{cat_idx+1}/{len(categories)}]: {category_name}")
             category_results = process_category(cat)
-            all_results.extend(category_results)
             
-            # Update counts
-            total_subcategories_count += len(category_results)
-            for res in category_results:
-                total_threads_count += len(res['threads'])
+            if category_results:
+                all_results.extend(category_results)
+                save_results_incrementally(all_results, output_filename)
                 
-                # Count attachments
-                for thread in res['threads']:
-                    attachments = thread.get('downloaded_attachments', [])
-                    total_attachments_count += len(attachments)
-                    total_downloaded_attachments += sum(1 for a in attachments if a.get('success', False))
+                total_subcategories_count += len(category_results)
+                for res in category_results:
+                    total_threads_count += len(res['threads'])
+                    
+                    for thread in res['threads']:
+                        attachments = thread.get('downloaded_attachments', [])
+                        total_attachments_count += len(attachments)
+                        total_downloaded_attachments += sum(1 for a in attachments if a.get('success', False))
             
-            # Delay between categories
             if cat_idx < len(categories) - 1:
-                delay = random.uniform(10, 20)  # Shorten delay in test mode
+                delay = random.uniform(10, 20)
                 logging.info(f"等待 {delay:.1f}秒后处理下一个分类...")
                 time.sleep(delay)
                 
         except Exception as e:
             logging.error(f"处理分类 {category_name} 出错: {str(e)}")
-            # Wait after an error
             delay = random.uniform(30, 60)
             logging.info(f"出错后等待 {delay:.1f}秒...")
             time.sleep(delay)
     
-    # Save results after all crawling tasks are complete
     logging.info(f"所有爬取任务完成，正在将数据保存到文件: {output_filename}...")
     with open(output_filename, 'w', encoding='utf-8') as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-    # Final summary
     logging.info("\n" + "=" * 50)
     logging.info("爬取摘要:")
     logging.info(f"处理了 {len(categories)} 个一级分类")
