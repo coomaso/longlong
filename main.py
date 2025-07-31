@@ -4,12 +4,11 @@ import json
 import random
 import os
 import re
+import urllib.parse
 from datetime import datetime
 import logging
-import threading
 import queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import urllib.parse
 
 # 全局配置
 TEST_MODE = True  # 启用测试模式
@@ -58,6 +57,9 @@ def get_real_download_url(down_direct_url):
         # 设置动态Cookie
         headers['Cookie'] = get_dynamic_cookie()
         
+        # 记录请求的URL
+        logging.debug(f"请求下载接口: {down_direct_url}")
+        
         response = requests.get(
             down_direct_url,
             headers=headers,
@@ -65,15 +67,31 @@ def get_real_download_url(down_direct_url):
         )
         response.raise_for_status()
         
+        # 记录响应状态
+        logging.debug(f"接口响应状态: {response.status_code}")
+        
         data = response.json()
         if data.get('errNo') == 0:
             real_url = data['result']['url']
             # 处理URL中的转义字符
             real_url = real_url.replace('\\/', '/')
+            
+            # 解码URL编码的字符
+            try:
+                real_url = urllib.parse.unquote(real_url)
+            except Exception as e:
+                logging.warning(f"URL解码失败: {str(e)}")
+            
+            # 记录获取到的真实URL
+            logging.info(f"获取真实下载链接: {real_url}")
             return real_url
         else:
             logging.warning(f"获取真实下载链接失败: {data.get('msg')}")
             return None
+    except json.JSONDecodeError:
+        # 如果响应不是JSON，可能是直接文件链接
+        logging.info(f"直接文件链接: {down_direct_url}")
+        return down_direct_url
     except Exception as e:
         logging.error(f"获取真实下载链接出错: {str(e)}")
         return None
@@ -96,6 +114,9 @@ def download_file(url, file_path, max_retries=MAX_RETRIES):
             
             # 添加随机延迟
             time.sleep(random.uniform(0.5, 1.5))
+            
+            # 记录下载请求
+            logging.debug(f"下载请求: {url}")
             
             response = requests.get(
                 url, 
@@ -123,6 +144,7 @@ def download_file(url, file_path, max_retries=MAX_RETRIES):
                 os.remove(file_path)  # 删除不完整的文件
                 continue
             
+            logging.info(f"文件下载成功: {file_path} ({actual_size} 字节)")
             return True
             
         except Exception as e:
@@ -146,12 +168,12 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
             
             # 第一步：获取真实的下载链接
             logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                         f"获取真实下载链接: {down_direct_url}")
+                         f"处理附件: {attach_name}")
             
             real_url = get_real_download_url(down_direct_url)
             if not real_url:
                 logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                                f"获取真实下载链接失败")
+                                f"获取下载链接失败")
                 task_queue.task_done()
                 continue
             
@@ -172,14 +194,14 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
             
             # 第二步：下载文件
             logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                         f"开始下载附件: {attach_name} ({os.path.basename(real_url)})")
+                         f"开始下载: {os.path.basename(real_url)}")
             
             success = download_file(real_url, save_path)
             
             result = {
                 'name': attach_name,
-                'down_direct_url': down_direct_url,
-                'real_url': real_url,
+                'original_url': down_direct_url,
+                'final_url': real_url,
                 'local_path': save_path if success else None,
                 'success': success
             }
@@ -499,7 +521,7 @@ def process_category(category):
                 # 页面间延迟
                 if page <= total_pages:
                     delay = random.uniform(3, 8)  # 测试模式下缩短延迟
-                    logging.info(f"[分类: {category_name}][子分类: {group_name}] 等待 {delay:.1f}秒后获取下一页...")
+                    logging.info(f"[分类: {category_name}][子分类: {group_name}] 等待 {delay:.2f}秒后获取下一页...")
                     time.sleep(delay)
                     
             except Exception as e:
@@ -633,6 +655,8 @@ def main():
 
 if __name__ == "__main__":
     try:
+        # 启用详细日志以帮助调试
+        logging.getLogger().setLevel(logging.DEBUG)
         main()
     except KeyboardInterrupt:
         logging.info("程序被用户中断")
