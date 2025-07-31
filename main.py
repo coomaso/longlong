@@ -579,7 +579,7 @@ def save_results_incrementally(results, filename):
 
 
 def main():
-    output_filename = 'zhulong_test_data.json' if TEST_MODE else 'zhulong_full_data.json'
+    output_filename = 'zhulong_full_data.json' if TEST_MODE else 'zhulong_test_data.json'
     
     # Ensure the downloads directory exists
     os.makedirs('downloads', exist_ok=True)
