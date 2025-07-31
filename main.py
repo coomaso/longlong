@@ -59,20 +59,20 @@ def get_real_download_url(down_direct_url):
             logging.warning(f"获取真实下载链接请求失败，已达最大重试次数")
             return None
         
-        # New: Check for non-JSON response before parsing
         try:
             data = response.json()
         except json.JSONDecodeError as e:
             logging.error(f"获取真实下载链接时JSON解析出错: {str(e)}。响应内容：{response.text[:200]}...")
             return None
 
-        if data.get('errNo') == 0:
+        # 检查 errNo 和 result 字段是否存在
+        if data.get('errNo') == 0 and data.get('result') and data['result'].get('url'):
             real_url = data['result']['url']
             # Handle escaped characters in the URL
             real_url = real_url.replace('\\/', '/')
             return real_url
         else:
-            logging.warning(f"获取真实下载链接失败: {data.get('msg')}")
+            logging.warning(f"获取真实下载链接失败: API返回数据不完整或有误. 响应: {data}")
             return None
     except Exception as e:
         logging.error(f"获取真实下载链接出错: {str(e)}")
