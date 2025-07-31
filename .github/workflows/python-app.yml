@@ -1,7 +1,6 @@
 name: 中表候选人采集及企业微信通知
 
 on:
-
   push:
     branches: [ "main" ]  # 仅在推送到 main 分支时执行
 
@@ -11,6 +10,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # 新增：设置作业超时时间为 10 分钟 (6 小时)
 
     steps:
     - name: Checkout repository
@@ -39,7 +39,7 @@ jobs:
         
         # 添加文件
         git add zhulong_full_data.json
-    
+        
         # 检查是否有更改
         if git diff --cached --quiet; then
           echo "No changes to commit."
