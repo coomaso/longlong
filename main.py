@@ -59,6 +59,11 @@ def get_real_download_url(down_direct_url):
             logging.warning(f"获取真实下载链接请求失败，已达最大重试次数")
             return None
 
+        # 增加对响应状态码的检查
+        if response.status_code != 200:
+            logging.warning(f"获取真实下载链接失败，HTTP状态码: {response.status_code}")
+            return None
+
         data = response.json()
         if data.get('errNo') == 0:
             real_url = data['result']['url']
@@ -68,6 +73,9 @@ def get_real_download_url(down_direct_url):
         else:
             logging.warning(f"获取真实下载链接失败: {data.get('msg')}")
             return None
+    except json.JSONDecodeError as e:
+        logging.error(f"获取真实下载链接时JSON解析出错: {str(e)}。响应内容：{response.text[:200]}...")
+        return None
     except Exception as e:
         logging.error(f"获取真实下载链接出错: {str(e)}")
         return None
@@ -450,7 +458,7 @@ def process_category(category):
                 detailed_threads = []
                 for thread in threads:
                     tid = thread.get('tid')
-                    thread_title = thread.get('title', '无标题帖子')
+                    thread_title = thread.get('subject', '无标题帖子')
                     
                     if not tid:
                         logging.warning(f"[分类: {category_name}][子分类: {group_name}] 帖子缺少TID: {thread_title}")
