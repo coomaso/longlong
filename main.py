@@ -49,39 +49,6 @@ def sanitize_filename(name):
     # Remove characters not allowed in Windows filenames
     return re.sub(r'[\\/*?:"<>|]', "", name)
 
-def get_real_download_url(down_direct_url):
-    """Get the real download URL from the API endpoint"""
-    try:
-        logging.info(f"正在请求下载API: {down_direct_url}")
-        response = make_request_with_retry('get', down_direct_url)
-        
-        if response is None:
-            logging.warning(f"获取真实下载链接请求失败，已达最大重试次数")
-            return None
-        
-        try:
-            data = response.json()
-        except json.JSONDecodeError as e:
-            logging.error(f"获取真实下载链接时JSON解析出错: {str(e)}。响应内容：{response.text[:200]}...")
-            return None
-
-        # 检查 errNo 和 result 字段是否存在
-        if data.get('errNo') == 0 and data.get('result') and data['result'].get('url'):
-            real_url = data['result']['url']
-            # Handle escaped characters in the URL
-            real_url = real_url.replace('\\/', '/')
-            logging.info(f"成功获取真实下载链接: {real_url}")
-            return real_url
-        else:
-            error_msg = f"API返回错误: errNo={data.get('errNo')}, msg={data.get('msg')}"
-            if 'result' in data and 'url' not in data['result']:
-                error_msg += " - result中缺少url字段"
-            logging.warning(error_msg)
-            return None
-    except Exception as e:
-        logging.error(f"获取真实下载链接出错: {str(e)}")
-        return None
-
 def download_file(url, file_path, max_retries=MAX_RETRIES):
     """
     Download a file and save it to the specified path
@@ -93,14 +60,30 @@ def download_file(url, file_path, max_retries=MAX_RETRIES):
     # Ensure the directory exists
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     
+    # Set download headers
+    download_headers = {
+        'User-Agent': headers['User-Agent'],
+        'Cookie': get_dynamic_cookie(),
+        'Referer': url  # Use the URL itself as Referer for direct downloads
+    }
+    
     for attempt in range(max_retries):
         try:
+            # Add random delay
+            time.sleep(random.uniform(0.5, 1.5))
+            
             # Use the retry mechanism to get the file response
             logging.info(f"开始下载文件: {url}")
-            response = make_request_with_retry('get', url, stream=True)
-            if response is None:
-                logging.error(f"下载文件请求失败，已达最大重试次数")
-                return False
+            response = requests.get(
+                url, 
+                headers=download_headers, 
+                stream=True, 
+                timeout=REQUEST_TIMEOUT
+            )
+            
+            # Log response status
+            logging.info(f"收到响应: {response.status_code} {url}")
+            response.raise_for_status()
 
             # Get file size
             file_size = int(response.headers.get('Content-Length', 0))
@@ -154,29 +137,27 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
             # 获取附件名称
             attach_name = attach.get('name', f'unnamed_attachment_{tid}_{time.time()}')
             
+            # 备用下载链接
+            backup_url = attach.get('attachment')
+            
             if not api_endpoint_url:
                 logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] 附件缺少URL")
                 task_queue.task_done()
                 continue
             
-            # 第一步：获取真实的下载链接
+            # 构造Referer头 - 关键修复
+            referer_url = f"https://www.zhulong.com/bbs/{tid}.html"
+            
+            # 第一步：尝试使用官方下载接口
             logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                         f"正在请求下载接口获取真实下载链接: {api_endpoint_url}")
+                         f"正在使用官方下载接口: {api_endpoint_url}")
             
-            real_url = get_real_download_url(api_endpoint_url)
-            
-            if not real_url:
-                # 尝试备用方案：使用attachment字段作为直接下载链接
-                backup_url = attach.get('attachment')
-                if backup_url and backup_url.startswith('http'):
-                    logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                                    f"尝试备用下载链接: {backup_url}")
-                    real_url = backup_url
-                else:
-                    logging.error(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                                  f"无法获取有效下载链接，已跳过。")
-                    task_queue.task_done()
-                    continue
+            # 设置下载头
+            download_headers = {
+                'User-Agent': headers['User-Agent'],
+                'Referer': referer_url,
+                'Cookie': get_dynamic_cookie()
+            }
             
             # Clean up filename
             clean_category = sanitize_filename(category_name)
@@ -193,19 +174,129 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
                 clean_name
             )
             
-            # Download the file
-            logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                         f"开始下载附件: {attach_name} ({os.path.basename(real_url)})")
+            # 确保目录存在
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             
-            success = download_file(real_url, save_path)
+            # 下载文件
+            success = False
+            
+            # 首先尝试使用官方API端点URL
+            if api_endpoint_url:
+                for attempt in range(MAX_RETRIES + 1):
+                    try:
+                        # Add random delay
+                        time.sleep(random.uniform(0.5, 1.5))
+                        
+                        response = requests.get(
+                            api_endpoint_url,
+                            headers=download_headers,
+                            stream=True,
+                            timeout=REQUEST_TIMEOUT
+                        )
+                        
+                        # Log response status
+                        logging.info(f"收到响应: {response.status_code} {api_endpoint_url}")
+                        response.raise_for_status()
+                        
+                        # Get file size
+                        file_size = int(response.headers.get('Content-Length', 0))
+                        logging.info(f"文件大小: {file_size/1024/1024:.2f} MB")
+                        
+                        # Download the file
+                        with open(save_path, 'wb') as f:
+                            downloaded = 0
+                            start_time = time.time()
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:  # Filter out keep-alive new chunks
+                                    f.write(chunk)
+                                    downloaded += len(chunk)
+                            elapsed = time.time() - start_time
+                            speed = downloaded / elapsed / 1024 if elapsed > 0 else 0
+                            logging.info(f"下载完成: {downloaded/1024/1024:.2f} MB, 平均速度: {speed:.2f} KB/s, 耗时: {elapsed:.2f}秒")
+                        
+                        # Verify file size
+                        actual_size = os.path.getsize(save_path)
+                        if file_size > 0 and actual_size != file_size:
+                            logging.warning(f"文件大小不匹配: 预期 {file_size} 字节, 实际 {actual_size} 字节")
+                            os.remove(save_path)  # Delete incomplete file
+                            continue
+                        
+                        success = True
+                        break
+                    except Exception as e:
+                        logging.error(f"官方接口下载失败 (尝试 {attempt+1}/{MAX_RETRIES}): {str(e)}")
+                        if attempt < MAX_RETRIES:
+                            delay = INITIAL_RETRY_DELAY * (2 ** attempt) * random.uniform(0.8, 1.2)
+                            logging.info(f"等待 {delay:.2f}秒后重试...")
+                            time.sleep(delay)
+            
+            # 如果官方接口失败，尝试备用链接
+            if not success and backup_url and backup_url.startswith('http'):
+                logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                                f"尝试备用下载链接: {backup_url}")
+                
+                for attempt in range(MAX_RETRIES + 1):
+                    try:
+                        # Add random delay
+                        time.sleep(random.uniform(0.5, 1.5))
+                        
+                        response = requests.get(
+                            backup_url,
+                            headers=download_headers,
+                            stream=True,
+                            timeout=REQUEST_TIMEOUT
+                        )
+                        
+                        # Log response status
+                        logging.info(f"收到响应: {response.status_code} {backup_url}")
+                        response.raise_for_status()
+                        
+                        # Get file size
+                        file_size = int(response.headers.get('Content-Length', 0))
+                        logging.info(f"文件大小: {file_size/1024/1024:.2f} MB")
+                        
+                        # Download the file
+                        with open(save_path, 'wb') as f:
+                            downloaded = 0
+                            start_time = time.time()
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:  # Filter out keep-alive new chunks
+                                    f.write(chunk)
+                                    downloaded += len(chunk)
+                            elapsed = time.time() - start_time
+                            speed = downloaded / elapsed / 1024 if elapsed > 0 else 0
+                            logging.info(f"下载完成: {downloaded/1024/1024:.2f} MB, 平均速度: {speed:.2f} KB/s, 耗时: {elapsed:.2f}秒")
+                        
+                        # Verify file size
+                        actual_size = os.path.getsize(save_path)
+                        if file_size > 0 and actual_size != file_size:
+                            logging.warning(f"文件大小不匹配: 预期 {file_size} 字节, 实际 {actual_size} 字节")
+                            os.remove(save_path)  # Delete incomplete file
+                            continue
+                        
+                        success = True
+                        break
+                    except Exception as e:
+                        logging.error(f"备用链接下载失败 (尝试 {attempt+1}/{MAX_RETRIES}): {str(e)}")
+                        if attempt < MAX_RETRIES:
+                            delay = INITIAL_RETRY_DELAY * (2 ** attempt) * random.uniform(0.8, 1.2)
+                            logging.info(f"等待 {delay:.2f}秒后重试...")
+                            time.sleep(delay)
             
             result = {
                 'name': attach_name,
-                'down_direct_url': api_endpoint_url,
-                'real_url': real_url,
+                'api_url': api_endpoint_url,
+                'backup_url': backup_url if not success else None,
                 'local_path': save_path if success else None,
                 'success': success
             }
+            
+            if success:
+                logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                             f"附件下载成功: {attach_name}")
+            else:
+                logging.error(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                              f"附件下载失败: {attach_name}")
             
             task_queue.task_done()
             return result
