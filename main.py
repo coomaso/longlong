@@ -123,30 +123,28 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
         try:
             attach = task_queue.get(timeout=1) # 增加超时，防止线程阻塞
             
-            # 优先使用 API 端点获取真实下载链接，如果不存在则退回到直接下载链接
-            down_direct_url = attach.get('url')
-            if not down_direct_url:
-                down_direct_url = attach.get('attachment')
+            api_endpoint_url = attach.get('url')
+            direct_file_url = attach.get('attachment')
+            
+            real_download_url = None
+            
+            # 优先尝试从 API 接口获取真实下载链接
+            if api_endpoint_url and 'downDirect' in api_endpoint_url:
+                logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                             f"正在请求下载接口获取真实下载链接: {api_endpoint_url}")
+                real_download_url = get_real_download_url(api_endpoint_url)
+            
+            # 如果从 API 获取失败，则退回到直接文件链接
+            if not real_download_url and direct_file_url:
+                logging.warning(f"无法从API获取链接，尝试使用直接下载链接: {direct_file_url}")
+                real_download_url = direct_file_url
             
             attach_name = attach.get('name', f'unnamed_attachment_{tid}_{time.time()}')
             
-            if not down_direct_url:
-                logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] 附件缺少URL")
+            if not real_download_url:
+                logging.error(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] 无法获取附件的有效下载链接，已跳过。")
                 task_queue.task_done()
                 continue
-            
-            real_url = down_direct_url
-            
-            # 如果 URL 是 API 端点，就请求它来获取真实下载链接
-            if 'downDirect' in down_direct_url:
-                logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                             f"正在请求下载接口获取真实下载链接: {down_direct_url}")
-                real_url = get_real_download_url(down_direct_url)
-                if not real_url:
-                    logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                                     f"获取真实下载链接失败")
-                    task_queue.task_done()
-                    continue
             
             # 清理文件名
             clean_category = sanitize_filename(category_name)
@@ -163,22 +161,21 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
                 clean_name
             )
             
-            # 第二步：下载文件
+            # 下载文件
             logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                         f"开始下载附件: {attach_name} ({os.path.basename(real_url)})")
+                         f"开始下载附件: {attach_name} ({os.path.basename(real_download_url)})")
             
-            success = download_file(real_url, save_path)
+            success = download_file(real_download_url, save_path)
             
             result = {
                 'name': attach_name,
-                'down_direct_url': down_direct_url,
-                'real_url': real_url,
+                'down_direct_url': api_endpoint_url,
+                'real_url': real_download_url,
                 'local_path': save_path if success else None,
                 'success': success
             }
             
             task_queue.task_done()
-            # 返回结果，但在这里是工作线程，结果会通过future传递
             
         except queue.Empty:
             break
@@ -458,7 +455,7 @@ def process_category(category):
                 detailed_threads = []
                 for thread in threads:
                     tid = thread.get('tid')
-                    thread_title = thread.get('subject', '无标题帖子')
+                    thread_title = thread.get('title', '无标题帖子')
                     
                     if not tid:
                         logging.warning(f"[分类: {category_name}][子分类: {group_name}] 帖子缺少TID: {thread_title}")
