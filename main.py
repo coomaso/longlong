@@ -168,7 +168,7 @@ def process_category(category):
             detailed_threads = []
             for thread_idx, thread in enumerate(threads): # 增加帖子索引
                 tid = thread.get('tid')
-                thread_title = thread.get('subject', '无标题帖子') # 获取帖子标题用于提示
+                thread_title = thread.get('title', '无标题帖子') # 获取帖子标题用于提示
                 if tid:
                     print(f"        -> (帖子 {thread_idx + 1}/{len(threads)}) 正在获取帖子详情: '{thread_title}' (TID:{tid})") # 增加帖子详情提示
                     detail = get_thread_detail(tid)
@@ -178,7 +178,7 @@ def process_category(category):
                 else:
                     print(f"        -> (帖子 {thread_idx + 1}/{len(threads)}) 警告: 帖子缺少 TID，跳过详情获取。标题: '{thread_title}'") # 增加缺少TID提示
                     detailed_threads.append(thread)
-                time.sleep(random.uniform(0.5, 1.5)) # 帖子详情请求之间的小随机延迟
+                time.sleep(random.uniform(10, 30)) # 帖子详情请求之间的小随机延迟
             
             total_threads_in_subcategory.extend(detailed_threads)
             print(f"      子分类 '{group_name}' 已获取第 {page}/{total_pages} 页，共 {len(threads)} 条帖子详情。") # 更新页面获取提示
