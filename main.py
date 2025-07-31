@@ -32,7 +32,7 @@ def make_request_with_retry(method, url, headers, params, timeout, retries=0):
         return response
     except requests.exceptions.RequestException as e:
         if retries < MAX_RETRIES:
-            delay = INITIAL_RETRY_DELAY * (2 ** retries) + random.uniform(0, 2) # 指数退避加随机抖动
+            delay = INITIAL_RETRY_DELAY + random.uniform(0, 2) # 指数退避加随机抖动
             print(f"请求失败: {url} - {e}。第 {retries + 1}/{MAX_RETRIES} 次重试，等待 {delay:.2f} 秒...")
             time.sleep(delay)
             return make_request_with_retry(method, url, headers, params, timeout, retries + 1)
