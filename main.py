@@ -190,7 +190,7 @@ def process_category(category):
                 
             page += 1
             # 在页面/请求组之间引入更长的随机延迟 (30-60 秒)
-            sleep_time = random.uniform(30, 60)
+            sleep_time = random.uniform(1, 3)
             print(f"      暂停 {sleep_time:.2f} 秒，然后继续到下一页/子分类...")
             time.sleep(sleep_time) 
             
@@ -228,7 +228,7 @@ def main():
             
             # 在处理完一个分类后，增加 10-60 秒的随机延迟
             if cat_idx < len(categories) - 1: # 避免在最后一个分类处理完后也等待
-                sleep_time_main_loop = random.uniform(10, 60)
+                sleep_time_main_loop = random.uniform(1, 3)
                 print(f"\n<<<< 处理完分类 '{cat.get('category_name', 'N/A')}'。暂停 {sleep_time_main_loop:.2f} 秒，然后继续处理下一个分类... >>>>") # 增加分类处理完成提示
                 time.sleep(sleep_time_main_loop)
 
