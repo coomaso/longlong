@@ -546,7 +546,7 @@ def get_thread_detail(tid, thread_title, group_name, category_name):
                 'group_name': result.get('group_name', ''),
                 'pic': result.get('pic', '')
             }
-            
+            logging.info(f"获取的贴子字段- {detail}")
             # Add a check to ensure attachlist is a list
             if not isinstance(detail['attachlist'], list):
                 detail['attachlist'] = []
