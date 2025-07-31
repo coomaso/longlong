@@ -257,14 +257,12 @@ def get_categories():
             logging.error("获取分类请求失败")
             return []
         
-        # 确保响应是JSON格式
         try:
             data = response.json()
         except json.JSONDecodeError:
             logging.error(f"API返回非JSON响应: {response.text[:200]}")
             return []
         
-        # 检查data是否为字典
         if not isinstance(data, dict):
             logging.error(f"API返回的数据类型错误，期望字典，实际得到: {type(data)}")
             return []
@@ -399,7 +397,6 @@ def get_thread_detail(tid, thread_title, group_name, category_name):
                 'content': result.get('content', ''),
                 'tags': result.get('tags', ''),
                 'message': result.get('message', ''),
-                'attachlist': result.get('attachlist', []),
                 'hot': result.get('sum_hot', []),
                 'star': result.get('star', []),
                 'pics': result.get('picsArray', []),
@@ -407,12 +404,16 @@ def get_thread_detail(tid, thread_title, group_name, category_name):
                 'pic': result.get('pic', '')
             }
             
-            if not isinstance(detail['attachlist'], list):
+            # 关键修改：使用新的get_attachment_download_info函数获取附件信息
+            attachment_info = get_attachment_download_info(tid)
+            if attachment_info:
+                detail['attachlist'] = attachment_info['files']
+                logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title} (TID:{tid})] 获取到 {len(attachment_info['files'])} 个附件信息")
+                for idx, attach in enumerate(attachment_info['files']):
+                    logging.info(f"    - 附件 {idx+1}: {attach.get('filename')} -> URL: {attach.get('download_url')}")
+            else:
                 detail['attachlist'] = []
-
-            logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title} (TID:{tid})] 获取到 {len(detail['attachlist'])} 个附件")
-            for idx, attach in enumerate(detail['attachlist']):
-                logging.info(f"    - 附件 {idx+1}: {attach.get('name')} -> URL: {attach.get('url')}")
+                logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title} (TID:{tid})] 无法获取附件下载信息")
             
             return detail
         else:
@@ -466,20 +467,15 @@ def process_category(category):
                     if 'attachlist' in detail and detail['attachlist']:
                         start_time = time.time()
                         
-                        attachment_download_info = get_attachment_download_info(tid)
-                        
-                        if attachment_download_info:
-                            downloaded = download_attachments(
-                                attachment_download_info['files'], 
-                                category_name, 
-                                group_name, 
-                                thread_title, 
-                                tid
-                            )
-                            full_thread['downloaded_attachments'] = downloaded
-                        else:
-                            logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] 无法获取附件下载信息，跳过下载。")
-                            full_thread['downloaded_attachments'] = []
+                        # 直接使用从get_thread_detail获取的附件信息
+                        downloaded = download_attachments(
+                            detail['attachlist'], 
+                            category_name, 
+                            group_name, 
+                            thread_title, 
+                            tid
+                        )
+                        full_thread['downloaded_attachments'] = downloaded
                         
                         download_time = time.time() - start_time
                         logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
