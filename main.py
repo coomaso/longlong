@@ -48,7 +48,7 @@ def get_categories():
     try:
         response = make_request_with_retry('get', url, headers, params, timeout=10) # 使用重试函数
         data = response.json()
-        
+        print(f"一级分类源码: {data}")
         if data.get('errNo') == 0:
             return data['result']
         else:
