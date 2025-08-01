@@ -4,12 +4,12 @@ import json
 import random
 import os
 import re
-from datetime import datetime
 import logging
-import threading
 import queue
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import unquote
+from urllib.parse import unquote, quote, urlparse
+from datetime import datetime
 
 # Global Configuration
 TEST_MODE = True
@@ -33,36 +33,81 @@ logging.basicConfig(
 
 # Set request headers
 headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
     'Referer': 'https://www.zhulong.com/',
     'Accept': 'application/json, text/plain, */*',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Connection': 'keep-alive',
+    'Sec-Ch-Ua': '"Not.A/Brand";v="8", "Chromium";v="114", "Google Chrome";v="114"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-site',
 }
+
+# 使用会话保持连接
+session = requests.Session()
+session.headers.update(headers)
 
 # Dynamic Cookie Management
 def get_dynamic_cookie():
     return 'Hm_lvt_b4c6201caa3cb2837f622d668e688cfd=1751961635,1753093327,1753604656,1753919554; HMACCOUNT=FB83163D0F4ABA49; Hm_lpvt_b4c6201caa3cb2837f622d668e688cfd=1753995544; agency_id=2; PHPSESSID=kn642ohvac1s51eikt07d9pq13; agency_id=2; app_id=1; uuid=110758d4-723c-46ae-b6e9-3c6ec7cd1c2d; uid=15789975; username=%E6%BD%87%E6%B4%92%E9%94%8B; category_id=37; access_token=5423fbc605314aefbc3ee33ae9f68fd625f0bd88; ZLID=e8b5rpjaghEmoW2ylvfXapBetkxKx5LWLY0_Oem_9DIzXg50W5bFk17QEC91uTWA; province_id=13; city_id=195; reg_time=2022-02-15+16%3A55%3A02; ip_province_id=13; ip_city_id=195; zluuid=768F828E-8A1D-4AB3-99AC-FA941D8FCA29; bbs-uid=15789975; bbs-username=%E6%BD%87%E6%B4%92%E9%94%8B; only_uuid=19f3a264-dc31-2feb-02f7-3dc1a6e68477; Hm_lvt_49541358a94eea717001819b500f76c8=1749719683; Hm_lvt_918b0a71c46422e304aa32471c74fd98=1749719683; Hm_lvt_09566c1e6ae94ce8c4f40a54aed90f86=1749719704; Hm_lvt_d165b0df9d8b576128f53e461359a530=1749719704; fd=https%3A//www.baidu.com/link%3Furl%3DuQ4PZ636ul8QRiIsegAcrognuEADven6VHTYhbAj6BuMBSa2GfajoXzOzRycIYC9ZNozJxKYHqwyTe16XLfTTa%26wd%3D%26eqid%3Dc25b1d6c009856cc00000006684a9ad2; latest_search=%E4%B8%80%E5%BB%BA%E5%BB%BA%E7%AD%91%E5%9B%BE%E6%96%87%E5%AD%A6%E4%B9%A0%E9%80%9A2025; pcid=5990896829; agency_id=2; historicalSearchKeyWords=[%22%E6%94%AF%E6%8A%A4%E7%AE%B1%22%2C%22%E8%8A%B1%E7%AF%AE%E5%A4%96%E6%9E%B6%20%E5%9B%9B%E4%BB%A3%E5%BB%BA%E7%AD%91%22%2C%22%E5%8C%BB%E9%99%A2%E6%8A%80%E6%9C%AF%E6%A0%87%22%2C%22%E6%B2%88%E9%98%B3%E4%B8%AD%E5%BE%B7%E5%9B%AD%E5%9F%BA%E7%A1%80%E5%8F%8A%E5%85%AC%E5%85%B1%E8%AE%BE%E6%96%BD%E5%BB%BA%E8%AE%BEPPP%E9%A1%B9%E7%9B%AE%22%2C%22%E9%9B%A8%E6%B1%A1%E5%88%86%E6%B5%81%22%2C%22%E4%B8%B4%E6%97%B6%E7%94%A8%E6%B0%B4%E6%96%B9%E6%A1%88%22]; f=pc_bbsgroup_elite_0_1; fl=pc_down_group_0_1%252Cpc_bbsgroup_elite_0_1; sid=1F67E644-13DF-4A11-A1B9-449846831A2E; b_visit=1753995544971'
 
 def sanitize_filename(name):
+    """清理文件名中的非法字符"""
     return re.sub(r'[\\/*?:"<>|]', "", name)
 
-def download_file(url, file_path, max_retries=MAX_RETRIES):
+def download_file(url, file_path, referer_url=None, max_retries=MAX_RETRIES):
+    """下载文件并保存到本地"""
+    # 检查文件是否已存在
+    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+        logging.info(f"文件已存在，跳过下载: {os.path.basename(file_path)}")
+        return True
+    
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    
+    # 创建增强的请求头
+    download_headers = {
+        **headers,
+        'Referer': referer_url or 'https://www.zhulong.com/',
+        'Origin': 'https://www.zhulong.com'
+    }
     
     for attempt in range(max_retries):
         try:
-            response = make_request_with_retry('get', url, stream=True)
+            # 添加随机延迟避免频繁请求
+            time.sleep(random.uniform(1.0, 2.5))
+            
+            response = make_request_with_retry(
+                'get', 
+                url, 
+                headers=download_headers, 
+                stream=True,
+                timeout=30  # 增加下载超时时间
+            )
+            
             if response is None:
                 logging.error(f"下载文件请求失败，已达最大重试次数")
                 return False
 
             file_size = int(response.headers.get('Content-Length', 0))
+            start_time = time.time()
+            downloaded_size = 0
             
             with open(file_path, 'wb') as f:
-                downloaded = 0
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-                        downloaded += len(chunk)
+                        downloaded_size += len(chunk)
+                        
+                        # 计算下载速度
+                        elapsed = time.time() - start_time
+                        if elapsed > 0:
+                            speed = downloaded_size / elapsed / 1024  # KB/s
+                            if downloaded_size % (1024 * 100) == 0:  # 每100KB更新一次
+                                logging.debug(f"下载进度: {downloaded_size}/{file_size} bytes, 速度: {speed:.2f} KB/s")
             
             actual_size = os.path.getsize(file_path)
             if file_size > 0 and actual_size != file_size:
@@ -70,6 +115,8 @@ def download_file(url, file_path, max_retries=MAX_RETRIES):
                 os.remove(file_path)
                 continue
             
+            download_time = time.time() - start_time
+            logging.info(f"文件下载成功: {os.path.basename(file_path)}, 大小: {actual_size} 字节, 耗时: {download_time:.2f}秒")
             return True
             
         except Exception as e:
@@ -79,6 +126,7 @@ def download_file(url, file_path, max_retries=MAX_RETRIES):
     return False
 
 def get_attachment_download_info(tid):
+    """获取附件下载信息"""
     url = "https://www.zhulong.com/bbs/prod-api/attachment/attachment/downLog"
     api_headers = {**headers, "Referer": f"https://www.zhulong.com/bbs/d/{tid}.html"}
 
@@ -98,8 +146,15 @@ def get_attachment_download_info(tid):
                 download_url = item.get("url")
 
                 if download_url:
+                    # 正确解码URL并处理特殊字符
                     download_url = unquote(download_url)
-                    file_info.append({"filename": filename, "download_url": download_url})
+                    
+                    # 确保URL路径正确编码
+                    parsed = urlparse(download_url)
+                    safe_path = quote(parsed.path, safe='/:?=&')
+                    safe_url = parsed._replace(path=safe_path).geturl()
+                    
+                    file_info.append({"filename": filename, "download_url": safe_url})
 
             return {
                 "tid": tid,
@@ -114,17 +169,27 @@ def get_attachment_download_info(tid):
     return None
 
 def download_worker(task_queue, category_name, group_name, thread_title, tid):
+    """工作线程函数，处理附件下载任务"""
+    downloaded_files = []
+    
     while True:
         try:
-            file_item = task_queue.get(timeout=1)
+            # 增加超时时间避免永久阻塞
+            file_item = task_queue.get(timeout=10)
             attach_name = file_item['filename']
             download_url = file_item['download_url']
             
             if not download_url:
                 logging.error(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] 附件 '{attach_name}' 缺少下载链接，已跳过。")
+                downloaded_files.append({
+                    'name': attach_name,
+                    'success': False,
+                    'error': 'Missing download URL'
+                })
                 task_queue.task_done()
                 continue
             
+            # 创建安全的文件名和路径
             clean_category = sanitize_filename(category_name)
             clean_group = sanitize_filename(group_name)
             clean_title = sanitize_filename(thread_title)
@@ -138,10 +203,14 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
                 clean_name
             )
             
-            logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
-                         f"开始下载附件: {attach_name} ({os.path.basename(download_url)})")
+            # 创建帖子详情页URL作为Referer
+            referer_url = f"https://www.zhulong.com/bbs/d/{tid}.html"
             
-            success = download_file(download_url, save_path)
+            logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                         f"开始下载附件: {attach_name}")
+            
+            # 下载文件并传递Referer
+            success = download_file(download_url, save_path, referer_url=referer_url)
             
             result = {
                 'name': attach_name,
@@ -150,20 +219,30 @@ def download_worker(task_queue, category_name, group_name, thread_title, tid):
                 'local_path': save_path if success else None,
                 'success': success
             }
+            downloaded_files.append(result)
+            
+            logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] "
+                         f"附件 {attach_name} 下载 {'成功' if success else '失败'}")
             
             task_queue.task_done()
-            return result
             
         except queue.Empty:
+            # 队列为空时退出循环
             break
         except Exception as e:
             logging.error(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title}] 下载工作线程出错: {str(e)}")
-            task_queue.task_done()
-            break
+            if 'file_item' in locals():
+                downloaded_files.append({
+                    'name': attach_name,
+                    'success': False,
+                    'error': str(e)
+                })
+                task_queue.task_done()
     
-    return None
+    return downloaded_files
 
 def download_attachments(files_to_download, category_name, group_name, thread_title, tid):
+    """下载帖子的所有附件"""
     if not DOWNLOAD_ATTACHMENTS or not files_to_download:
         return []
     
@@ -192,7 +271,7 @@ def download_attachments(files_to_download, category_name, group_name, thread_ti
         for future in as_completed(futures):
             result = future.result()
             if result:
-                downloaded_files.append(result)
+                downloaded_files.extend(result)
     
     success_count = sum(1 for f in downloaded_files if f.get('success', False))
     if success_count > 0:
@@ -205,18 +284,20 @@ def download_attachments(files_to_download, category_name, group_name, thread_ti
     return downloaded_files
 
 def make_request_with_retry(method, url, params=None, headers=None, timeout=REQUEST_TIMEOUT, retries=0, stream=False):
+    """带重试机制的请求函数"""
     cookies = get_dynamic_cookie()
     
-    if headers is None:
-        headers = globals()['headers']
-
+    # 使用全局session，但更新特定请求的headers
+    request_headers = headers or globals()['headers']
+    
     try:
-        time.sleep(random.uniform(0.5, 1.5))
+        # 添加随机延迟避免请求过于频繁
+        time.sleep(random.uniform(1.0, 2.5))
         
-        response = requests.request(
+        response = session.request(
             method, 
             url, 
-            headers=headers, 
+            headers=request_headers, 
             params=params,
             cookies={'Cookie': cookies},
             timeout=timeout,
@@ -247,6 +328,7 @@ def make_request_with_retry(method, url, params=None, headers=None, timeout=REQU
             return None
 
 def get_categories():
+    """获取一级分类"""
     url = "https://www.zhulong.com/bbs/prod-api/home/resource/category"
     params = {'t': int(time.time() * 1000)}
     
@@ -286,6 +368,7 @@ def get_categories():
         return []
 
 def get_subcategories(category_id, category_name):
+    """获取子分类"""
     url = "https://www.zhulong.com/bbs/prod-api/home/resource/group"
     params = {
         'category_id': category_id,
@@ -327,6 +410,7 @@ def get_subcategories(category_id, category_name):
         return []
 
 def get_threads(group_id, group_name, category_name, page=1, limit=10):
+    """获取帖子列表"""
     url = "https://www.zhulong.com/bbs/prod-api/group/group/getGroupThreadTag"
     params = {
         'gid': group_id,
@@ -369,11 +453,13 @@ def get_threads(group_id, group_name, category_name, page=1, limit=10):
         return [], 1
 
 def get_thread_detail(tid, thread_title, group_name, category_name):
+    """获取帖子详情"""
     url = f"https://www.zhulong.com/bbs/prod-api/thread/thread/getThreadForTid?tid={tid}"
     params = {'t': int(time.time() * 1000)}
     
     try:
-        time.sleep(random.uniform(0.5, 1.5))
+        # 添加随机延迟
+        time.sleep(random.uniform(1.0, 2.0))
         
         response = make_request_with_retry('get', url, params)
         if response is None:
@@ -404,13 +490,13 @@ def get_thread_detail(tid, thread_title, group_name, category_name):
                 'pic': result.get('pic', '')
             }
             
-            # 关键修改：使用新的get_attachment_download_info函数获取附件信息
+            # 获取附件信息
             attachment_info = get_attachment_download_info(tid)
             if attachment_info:
                 detail['attachlist'] = attachment_info['files']
                 logging.info(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title} (TID:{tid})] 获取到 {len(attachment_info['files'])} 个附件信息")
                 for idx, attach in enumerate(attachment_info['files']):
-                    logging.info(f"    - 附件 {idx+1}: {attach.get('filename')} -> URL: {attach.get('download_url')}")
+                    logging.info(f"    - 附件 {idx+1}: {attach.get('filename')}")
             else:
                 detail['attachlist'] = []
                 logging.warning(f"[分类: {category_name}][子分类: {group_name}][帖子: {thread_title} (TID:{tid})] 无法获取附件下载信息")
@@ -424,6 +510,7 @@ def get_thread_detail(tid, thread_title, group_name, category_name):
         return {}
 
 def process_category(category):
+    """处理单个分类及其子分类"""
     category_id = category['id']
     category_name = category['category_name']
     
@@ -518,6 +605,7 @@ def process_category(category):
     return results
 
 def save_results_incrementally(results, filename):
+    """增量保存结果到JSON文件"""
     try:
         if not results:
             logging.info("没有结果需要保存")
@@ -541,6 +629,7 @@ def save_results_incrementally(results, filename):
         logging.error(f"保存数据出错: {str(e)}")
 
 def main():
+    """主函数"""
     output_filename = 'zhulong_test_data.json' if TEST_MODE else 'zhulong_full_data.json'
     
     os.makedirs('downloads', exist_ok=True)
