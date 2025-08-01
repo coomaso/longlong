@@ -10,7 +10,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # 新增：设置作业超时时间为 10 分钟 (6 小时)
+    timeout-minutes: 360 # 增加超时时间，以适应有延迟的爬虫脚本
 
     steps:
     - name: Checkout repository
@@ -25,20 +25,21 @@ jobs:
       run: |
         python3 -m pip install --upgrade pip
         pip install requests
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi  # 安装依赖
+        # 安装其他依赖，如果有的话
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
     - name: Run Python script (main.py)
       run: |
         python3 main.py
 
-    - name: Commit and push zhulong_full_data.json to the repository
+    - name: Commit and push changes
       run: |
         # 配置 Git 用户信息
         git config user.name "coomaso"
         git config user.email "coomaso@gmail.com"
         
-        # 添加文件
-        git add zhulong_full_data.json
+        # 添加所有 .json 文件和下载的附件目录
+        git add *.json downloads/ || echo "没有新文件需要添加"
         
         # 检查是否有更改
         if git diff --cached --quiet; then
@@ -46,8 +47,8 @@ jobs:
           exit 0
         fi
 
-        # 提交更改，如果没有更改则跳过
-        git commit -m "Update zhulong_full_data.json" || echo "No changes to commit"
+        # 提交更改
+        git commit -m "Update crawler data and attachments"
 
         # 推送到远程仓库
         git push origin main
