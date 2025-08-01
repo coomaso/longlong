@@ -13,7 +13,7 @@ from datetime import datetime
 
 # Global Configuration
 TEST_MODE = True
-MAX_TEST_PAGES = 10
+MAX_TEST_PAGES = 2
 MAX_TEST_SUBCATEGORIES = 2
 DOWNLOAD_ATTACHMENTS = False # False True
 MAX_CONCURRENT_DOWNLOADS = 1
